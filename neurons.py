@@ -281,6 +281,8 @@ class PoissonNeuron:
         self.rate_record.append(rate)
         # check if there's a spike
         spk = np.random.random() < rate
+        # store the spike
+        self.spk_record.append(int(spk))
 
         if spk:
             # reset the membrane potential
@@ -297,8 +299,7 @@ class PoissonNeuron:
             if self.refractory_time:
                 self.t_ref_left = self.t_ref
 
-        # store the spike
-        self.spk_record.append(int(spk))
+   
 
 
         # discretization time step [ms]

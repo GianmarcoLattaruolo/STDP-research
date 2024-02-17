@@ -81,7 +81,7 @@ class STDP_synapse:
         # weigths constrain
         if self.hard_constrain == 'None':
             self.W = self.W
-        if self.hard_constrain == True:
+        elif self.hard_constrain == True:
             self.W = np.clip(self.W, self.w_min, self.w_max)
         else:
             # dynamic weight constraint based on the current weight
@@ -97,7 +97,9 @@ class STDP_synapse:
         if self.hard_constrain:
             return {'W':np.array(self.W_records), 'pre_trace':np.array(self.pre_traces_records),'post_trace':np.array(self.post_traces_records)}
         else:
-            raise NotImplementedError
+            print("to be implemented")
+            return {'W':np.array(self.W_records), 'pre_trace':np.array(self.pre_traces_records),'post_trace':np.array(self.post_traces_records)}
+ 
         
     def reset_records(self):
         self.W_records = []
