@@ -304,6 +304,7 @@ class PoissonNeuron:
 
         # discretization time step [ms]
         dt = self.pars['dt']
+        
         # update the membrane potential
         self.mem = self.mem + (dt/self.tau_m)*(self.U_resting-self.mem + I_inj*self.R)
         # store the membrane potential

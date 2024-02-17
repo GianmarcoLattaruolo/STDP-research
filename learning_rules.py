@@ -6,6 +6,19 @@ import sys
 import shutil
 import time
 import numpy as np
+import pandas as pd
+# graphics libraries
+import matplotlib.pyplot as plt
+from ipywidgets import interact, interactive, fixed, interact_manual
+import ipywidgets as widgets
+from IPython.display import display
+import logging
+logging.getLogger('matplotlib.font_manager').disabled = True
+# use NMA plot style
+#plt.style.use("https://raw.githubusercontent.com/NeuromatchAcademy/course-content/main/nma.mplstyle")
+plt.style.use('seaborn-v0_8')
+my_layout = widgets.Layout()
+my_layout.width = '620px'
 
 
 class STDP_synapse:
@@ -99,16 +112,77 @@ class STDP_synapse:
         else:
             print("to be implemented")
             return {'W':np.array(self.W_records), 'pre_trace':np.array(self.pre_traces_records),'post_trace':np.array(self.post_traces_records)}
- 
-        
+    
     def reset_records(self):
         self.W_records = []
         self.pre_traces_records = []
         self.post_traces_records = []
 
-
+    def reset_weights(self):
+        self.W = np.random.random(self.N_post, self.N_pre)
+        self.traces = [np.zeros(self.N_pre), np.zeros(self.N_post)]
+        self.W_records = []
+        self.W_records.append(self.W)
+        self.pre_traces_records = []
          
+    def plot_synapses(self, post_index = 0, time_in_ms = False, subsampling = 1, trace_index_list = None):
 
+        if time_in_ms:
+            dt=self.pars['dt']
+            label_x = 'Time (ms)'
+        else:
+            dt=1
+            label_x = 'Time steps'
+
+        # check if the index of the post-syn neuron is correct
+        if post_index > self.N_post:
+            print(f'Post-synaptic index must be less than {self.N_post}')
+            return
+
+        # retrive the records
+        W = np.array(self.W_records)[1:,post_index,:]
+        pre_trace = np.array(self.pre_traces_records)
+        post_trace = np.array(self.post_traces_records)
+        num_steps = pre_trace.shape[0]
+        time_steps = np.arange(0, num_steps, 1)*dt
+
+        # initialize the figure
+        fig,ax = plt.subplots(4, figsize=(12, 14), gridspec_kw={'height_ratios': [1, 2, 2, 2]})#, sharex=True)
+
+        fig.colorbar(ax[0].imshow(W.T, cmap = 'viridis', aspect='auto'), ax=ax[0], orientation='vertical', fraction = 0.01, pad = 0.01)
+        ax[0].set_xlabel(label_x)
+        ax[0].grid(False)
+        ax[0].set_ylabel('Synaptic weights')
+        ax[0].set_title(f'Post-synaptic neuron: {post_index}')
+        
+
+        ax[1].plot(time_steps[::subsampling], W[ ::subsampling,:], lw=1., alpha=0.7)
+        ax[1].set_xlabel(label_x)
+        ax[1].set_ylabel('Weight')
+
+
+        # check the index of the trace to higlight
+        if trace_index_list is None:
+            trace_index_list = [int(self.N_pre/4), int(self.N_pre/2), int(3*self.N_pre/4)]
+        elif max(trace_index_list) > self.N_pre:
+            print(f'Trace indexes must be less than {self.N_pre}')
+            return
+        n = len(trace_index_list)
+
+        ax[2].plot(time_steps, pre_trace, lw=1., alpha=0.05)
+        df = pd.DataFrame(pre_trace[:,trace_index_list])
+        df.plot(ax=ax[2], color = ['r','g', 'b'], lw=1., alpha=1, legend=False)
+        #ax[0].plot(time_steps, , lw=1., alpha=1)#, color = 'r')
+        ax[2].set_title(f'Pre-synaptic traces - {n} higlighted')
+        ax[2].set_xlabel(label_x)
+        ax[2].set_ylabel('traces')
+
+        ax[3].plot(time_steps, post_trace, lw=1., alpha=0.7)
+        ax[3].set_xlabel(label_x)
+        ax[3].set_ylabel('Post-synaptic traces')
+
+        plt.tight_layout()
+        plt.show()
 
 
 
