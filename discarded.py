@@ -1,0 +1,204 @@
+
+def base_simulation(
+        pars,
+        spk_input, # input spike train, a numpy vector of shape (time_steps, N_pre)
+        neuron_type, # class for the neuron type
+        weight_rule = None, # class for the weights update
+        N_pre = 100, # number of pre-synaptic neurons
+        W_init = None, # initial weights
+        neuron_params = {}, # parameters for the neuron model
+        weight_update_params = {}, # parameters for the weight update
+):
+    N_post = 1 # this is the base simulation, just one output neuron
+    num_steps = np.shape(spk_input)[0]
+
+    # Initialize the post-syn neuron
+    my_neuron = neuron_type(pars, **neuron_params)
+    
+
+    # Check if the given inital weight are valid
+    if W_init is None:
+        W_init = np.random.rand(N_post, N_pre)
+    else:
+        assert np.shape(W_init)[1] == N_pre, 'W must have the same number of rows as the number of pre-synaptic neurons'
+
+    # Initialize the synapses with the given update rule
+    if weight_rule is not None:
+        my_synapses = weight_rule(pars, N_pre, N_post, W_init = W_init,**weight_update_params)
+    else:
+        W = W_init 
+
+    # start the simulation
+    for t in range(num_steps):
+        
+        # get the spikes from the pre-synaptic neurons at time t
+        pre_syn_spikes = spk_input[t,:] 
+        # get the weights from the synapse
+        if weight_rule is not None:
+            W = my_synapses.W
+        
+        # compute the input current for the postsynaptic neuron
+        #I = np.dot(pre_syn_spikes, W[:,0])
+        I = (W @ pre_syn_spikes)[0]
+
+        # run the neuron model
+        _ , spk = my_neuron.forward(I)
+
+        # update the weights
+        if weight_rule is not None:
+            spikes = [pre_syn_spikes, spk]
+            my_synapses.update_weights(spikes)
+
+    if weight_rule is not None:
+        return my_neuron, my_synapses
+    else:
+        return my_neuron
+    
+
+
+
+
+
+
+
+    
+def LIF(
+    pars,                        # parameters dictionary
+    I_inj,                       # input current [pA]
+    mem = None,                  # membrane potential [mV]
+    refractory_time = False,     
+    dynamic_threshold = False,   
+    hard_reset = True,           
+    noisy_input = False,
+    **kwargs,
+):
+    """
+    INPUTS:
+    - pars: parameter dictionary
+    - I_inj: input current [pA]
+    - mem: membrane potential [mV]
+    - refractory_time: boolean, if True the neuron has a refractory period
+    - dynamic_threshold: boolean, if True the threshold is dynamic
+    - hard_reset: boolean, if True the reset is hard
+    - noisy_input: boolean, if True the input is noisy
+    
+    REUTRNS:
+    - membrane potential at the next time step
+    - spikes produced by the neuron (0 or 1)
+    """
+    
+    #retrive parameters
+    tau_m = pars.get('tau_m', 10)
+    R = pars.get('R', 0.1)
+    U_resting = pars.get('U_resting', -75)
+    threshold = pars.get('threshold', -55)
+    dt = pars.get('dt', 0.1)
+    if mem is None:
+        mem = pars.get('U_init', -75)
+    if noisy_input:
+        sigma = pars.get('sigma', 1)
+        I_inj += np.random.normal(0, sigma, 1)
+
+    #mem = mem + (dt/tau_m)*(U_resting-mem + I_inj*R)
+    spk = mem > threshold
+    if spk:
+        if hard_reset:
+            mem = pars['U_reset']
+        else:
+            mem = mem - (threshold-U_resting)
+
+    mem = (1-dt/tau_m)*mem + dt/tau_m * U_resting + dt/tau_m  * R * I_inj
+
+    return mem, int(spk)
+
+
+
+def Poisson_neuron(pars, # parameters dictionary
+        I_inj, # input current [pA] 
+        mem = None, # membrane potential [mV]
+        refractory_time = False,
+        dynamic_threshold = False,
+):
+    """ Simulate a Poisson neuron
+
+    INPUT:
+    - pars                : parameter dictionary
+    - I_inj               : input current [pA]
+    - mem                 : membrane potential [mV]
+    - refractory_time     : boolean, if True the neuron has a refractory period 
+    - dynamic_threshold   : boolean, if True the neuron has a dynamic threshold
+
+    RETURNS:
+    - mem                 : membrane potential for the next time step
+    - spk                 : output spike  (0 if no spike, 1 if spike)
+
+    """
+
+    # retrive parameters
+    tau_m = pars.get('tau_m', 10)
+    R = pars.get('R', 10)   
+    U_resting = pars.get('U_resting', -75)
+    threshold = pars.get('threshold', -55)
+    dt = pars.get('dt', 0.1)
+    alpha = pars.get('alpha', 0.1)
+    if mem is None:
+        mem = pars.get('U_init', -75)
+        
+    mem = mem + (dt/tau_m)*(U_resting-mem + I_inj*R)     
+    rate = alpha * (mem - threshold)
+    spk = 1.*  np.random.random() < rate 
+    if spk:
+        mem = pars['U_resting']
+
+    return mem, spk
+
+
+
+
+
+def STDP_rule(
+        pars, # parameters dictionary
+        W, # current weights
+        traces, # STDP traces list [pre_synaptic, post_synaptic]  
+        spikes, # Spikes [pre_synaptic, post_synaptic]
+        **kwargs,
+):
+    """
+    INPUTS:
+    - pars    : parameters dictionary
+    - W       : current weights of shape: (N_post, N_pre)
+    - traces  : STDP traces list [pre_synaptic, post_synaptic] of shape (N_pre,), (N_pre,) respectively
+    - spikes  : Spikes [pre_synaptic, post_synaptic] of shape (N_pre,), (N_post,) respectively
+
+    RETURNS:
+    - W       : updated weights    
+    - traces  : updated STDP traces list [pre_synaptic, post_synaptic]
+
+    """
+
+    # retrive parameters
+    dt = pars.get('dt', 0.1)
+    A_plus = pars.get('A_plus', 0.01)
+    A_minus = pars.get('A_minus', 0.01)
+    tau_plus = pars.get('tau_plus', 20)
+    tau_minus = pars.get('tau_minus', 20)
+    Wmax = pars.get('Wmax', 1)
+    Wmin = pars.get('Wmin', 0)
+
+    if traces is None:
+        traces = [np.zeros(np.shape(W)[1]), np.zeros(np.shape(W)[0])]
+    # unpack the variables
+    pre_syn_trace, post_syn_trace = traces
+    pre_syn_spk, post_syn_spk = spikes
+
+    # what the correct order of weight and traces update?
+
+    # update the traces
+    pre_syn_trace = pre_syn_trace*(tau_plus-1)/tau_plus + pre_syn_spk
+    post_syn_trace = post_syn_trace*(tau_minus-1)/tau_minus + post_syn_spk
+
+    # update the weights
+    #print('depression',post_syn_trace)
+    W =  W + A_plus*np.outer(post_syn_spk,pre_syn_trace) - A_minus*np.outer(post_syn_trace,pre_syn_spk)
+
+    return W, [pre_syn_trace, post_syn_trace]
