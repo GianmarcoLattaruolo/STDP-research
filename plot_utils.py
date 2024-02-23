@@ -1,0 +1,678 @@
+# basic libraries
+import os
+import sys
+import shutil
+import time
+import numpy as np
+import pandas as pd
+
+# graphics libraries
+import matplotlib.pyplot as plt
+from ipywidgets import interact, interactive, fixed, interact_manual
+from IPython.display import clear_output
+import ipywidgets as widgets
+import jupyterlab_widgets as lab
+from IPython.display import display
+import logging
+logging.getLogger('matplotlib.font_manager').disabled = True
+# use NMA plot style
+#plt.style.use("https://raw.githubusercontent.com/NeuromatchAcademy/course-content/main/nma.mplstyle")
+plt.style.use('seaborn-v0_8')
+my_layout = widgets.Layout()
+my_layout.width = '620px'
+
+#import from my scripts
+main_dir = os.getcwd()
+if main_dir not in sys.path:
+    print('Adding the folder for the modules')
+    sys.path.append(main_dir)
+import importlib
+
+importlib.reload(importlib.import_module('neurons'))
+importlib.reload(importlib.import_module('learning_rules'))
+importlib.reload(importlib.import_module('plot_utils'))
+importlib.reload(importlib.import_module('experiments'))
+from experiments import *
+from neurons import *
+from learning_rules import *
+from plot_utils import *
+
+global simulation
+
+#########################################
+#                                       #
+#         STANDARD PLOT UTILS           #
+#                                       # 
+#########################################
+
+
+
+
+def raster_plot(
+        pars, 
+        post_syn_spk, # output spikes as array of 0,1 of shape (time_steps, N_post) or as list of spike times
+        pre_syn_spk = None, # input spikes as array of 0,1 of shape (time_steps, N_pre) or as list of spike times
+        pre_syn_plot = True, # if True plot the input spikes
+        title = 'Raster plot',
+        time_in_ms = False,
+        y_2_label = 'Output Spikes',
+        perturbation_sites = None):
+    
+    """
+    function to plot the raster plot of the input and output spikes
+    INPUTS:
+    - pars:             parameters of the simulation
+    - pre_syn_spk:      input spikes as array of 0,1 of shape (num_steps, N_pre) or as list of spike times
+    - post_syn_spk:     output spikes as array of 0,1 of shape (num_steps, N_post) or as list of spike times
+    - pre_syn_plot:     if True plot the input spikes, otherwise it plots only the output spikes
+    - title:            title of the plot
+    - time_in_ms:       if True the x axis is in ms, otherwise in time steps
+    - y_2_label:        label for the y axis of the output spikes
+    """
+
+    if time_in_ms:
+        dt=pars['dt']
+        label_x = 'Time (ms)'
+    else:
+        dt=1
+        label_x = 'Time steps'
+
+    # useful values
+    N_pre = np.shape(pre_syn_spk)[1]
+    if np.ndim(post_syn_spk) == 1:
+        N_post = 1
+        post_syn_spk = np.expand_dims(post_syn_spk, axis=1)
+    else:
+        N_post = np.shape(post_syn_spk)[1]
+
+    # Generate Plots
+    height_ratio = int(min(N_pre/ N_post,10))
+    if pre_syn_plot:
+        fig, ax = plt.subplots(2, figsize=(15,10), sharex=True, gridspec_kw = {'height_ratios': [height_ratio,1]})
+
+
+        # convert spike record in spike times
+        # note: even with 10000 presynaptic neurons and 10000 time steps this is not an heavy operation
+        if perturbation_sites is None:
+            pre_syn_spk_times = [np.array(np.where(pre_syn_spk[:,i]==1)[0])*dt for i in range(N_pre)]
+            var = len(pre_syn_spk_times)
+        else:
+            pre_syn_spk_1 = pre_syn_spk * (1-perturbation_sites)
+            pre_syn_spk_2 = pre_syn_spk * perturbation_sites
+            pre_syn_spk_times_1 = [np.array(np.where(pre_syn_spk_1[:,i]==1)[0])*dt for i in range(N_pre)]
+            pre_syn_spk_times_2 = [np.array(np.where(pre_syn_spk_2[:,i]==1)[0])*dt for i in range(N_pre)]
+            var = len(pre_syn_spk_times_1)
+
+            
+        if perturbation_sites is None:
+            ax[0].eventplot(pre_syn_spk_times, colors='black', lineoffsets=1,linewidth=1, linelengths=0.8, orientation='horizontal')
+        else:
+            ax[0].eventplot(pre_syn_spk_times_1, colors='black', lineoffsets=1,linewidth=1, linelengths=0.8, orientation='horizontal')
+            ax[0].eventplot(pre_syn_spk_times_2, colors='red', lineoffsets=1,linewidth=1, linelengths=0.8, orientation='horizontal')
+
+        # set y axis ticks corresponding to the neurons
+        if N_pre > 10:
+            ax[0].set_yticks(np.arange(0, var+1, round(N_pre/10)))
+        ax[0].set_ylabel("Input Spikes")
+        ax[0].set_title(title)
+
+
+        # Plot output spikes
+        post_syn_spk_times = [np.array(np.where(post_syn_spk[:,i]==1)[0])*dt for i in range(N_post)]
+
+        ax[1].eventplot(post_syn_spk_times, colors='black', lineoffsets=1,linewidth=1, linelengths=0.8, orientation='horizontal')   
+        ax[1].set_yticks(np.arange(0, N_post, max(round(N_post/10),5)))
+        ax[1].set_ylabel(y_2_label)
+        ax[1].set_xlabel(label_x)
+
+        plt.show()
+    else:
+
+        fig, ax = plt.subplots(1, figsize=(15,5))
+        # Plot output spikes
+        if type(post_syn_spk) is list:
+            post_syn_spk_times = post_syn_spk
+        else:
+            post_syn_spk_times = [np.array(np.where(post_syn_spk[:,i]==1)[0])*dt for i in range(N_post)]
+        ax.eventplot(post_syn_spk_times, colors='black', lineoffsets=1,linewidth=1, linelengths=0.8, orientation='horizontal')   
+        ax.set_yticks(np.arange(0, N_post, max(round(N_post/10),5)))
+        ax.set_ylabel(y_2_label)
+        ax.set_xlabel(label_x)
+        ax.set_title(title)
+        plt.show()
+
+
+
+
+def weights_plot(pars, weights_history,time_step = None, time_in_ms = False, title = None, subsampling = 1):
+    """
+    Plot the weights changes during the simulation through a colored image, a graph and a histogram
+    INPUT:
+    - pars:                parameters of the simulation
+    - weights_history:     synaptic weights over time for one post_synaptic neuron (num_steps, N_pre)
+    - time_step:           time step in which we want to see the weights distribution
+    - time_in_ms:          if True the x axis is in ms, otherwise in time steps
+    - title:               title of the plot
+    - subsampling:         subsampling factor in time for the weights plot (for long simulations)
+    """
+
+    # check if we want the time in ms
+    if time_in_ms:
+        dt=pars['dt']
+        label_x = 'Time (ms)'
+    else:
+        dt=1
+        label_x = 'Time steps'
+
+    # useful values
+    num_steps = weights_history.shape[0]
+    time_steps = np.arange(0, num_steps, 1)*dt
+
+    # set the default time step
+    if time_step is None:
+        time_step = num_steps-1
+    elif time_step > num_steps:
+        print(f'Time step must be less than {num_steps}')
+        return
+    
+    # initialize the plot
+    fig,ax = plt.subplots(3, figsize=(12, 10), gridspec_kw={'height_ratios': [1, 2, 1]})#, sharex=True)
+
+    # plot the weights history as a colored image
+    fig.colorbar(ax[0].imshow(weights_history[:,:].T, cmap = 'viridis', aspect='auto'), ax=ax[0], orientation='vertical', fraction = 0.01, pad = 0.01)
+    ax[0].set_xlabel(label_x)
+    ax[0].axvline(time_step, 0., 1., color='red', ls='--')
+    # remove the background grid
+    ax[0].grid(False)
+    ax[0].set_ylabel('Synaptic weights')
+    if title:
+        ax[0].set_title(title)
+    else:
+        ax[0].set_title('Synaptic weights over time')
+    
+    # plot the weights history as a graph
+    ax[1].plot(time_steps[::subsampling], weights_history[ ::subsampling,:], lw=1., alpha=0.7)
+    ax[1].axvline(time_step, 0., 1., color='red', ls='--')
+    ax[1].set_xlabel(label_x)
+    ax[1].set_ylabel('Weight')
+
+    # plot the weights distribution at a given time step
+    w_min = np.min(weights_history[time_step,:])-0.1
+    w_max = np.max(weights_history[time_step,:])+0.1
+    width = (w_max - w_min)/51
+    bins = np.arange(w_min, w_max, width)
+    #g_dis, _ = np.histogram(weights_history[time_step,:], bins)
+    #ax[1].bar(bins[1:], g_dis, color='b', alpha=0.5, width=width)
+    ax[2].hist(weights_history[time_step,:], bins, color='b', alpha=0.5, facecolor = '#2ab0ff', edgecolor='#169acf', linewidth=0.5)
+    ax[2].set_xlabel('weights ditribution')
+    ax[2].set_ylabel('Number')
+    ax[2].set_title(f'Time step: {time_step}')
+    plt.tight_layout()
+    plt.show()
+    
+
+
+
+def plot_traces(pars, pre_trace_record, post_trace_record, 
+                pre_trace_index_list = None, 
+                post_trace_index_list = None,
+                time_in_ms = False):
+    """
+    Plot the pre and post synaptic traces
+
+    INPUT:
+    - pars: parameter of the simulation
+    - pre_trace_record: synaptic traces of the pre-synaptic neurons (num_steps, N_pre)
+    - post_trace_record: synaptic traces of the post-synaptic neurons (num_steps, N_post)
+    - pre_trace_index_list: list of indexes of the pre-synaptic traces to higlight
+    - post_trace_index_list: list of indexes of the post-synaptic traces to higlight
+    - time_in_ms: if True the x axis is in ms, otherwise in time steps
+    """
+
+    # check if we want the time in ms
+    if time_in_ms:
+        dt=pars['dt']
+        label_x = 'Time (ms)'
+    else:
+        dt=1
+        label_x = 'Time steps'
+
+    N_pre = pre_trace_record.shape[1]
+    # check the index of the pre traces to higlight
+    if pre_trace_index_list is None:
+        pre_trace_index_list = [int(N_pre/4), int(N_pre/2), int(3*N_pre/4)]
+    elif max(pre_trace_index_list) > pre_trace_record.shape[1]:
+        print(f'Trace indexes must be less than {pre_trace_record.shape[1]}')
+        return
+    n_pre = len(pre_trace_index_list)
+
+    N_post = post_trace_record.shape[1]
+    # check the index of the post traces to higlight
+    if post_trace_index_list is None:
+        post_trace_index_list = [int(N_post/4), int(N_post/2), int(3*N_post/4)]
+    elif max(post_trace_index_list) > post_trace_record.shape[1]:
+        print(f'Trace indexes must be less than {post_trace_record.shape[1]}')
+        return
+    n_post = len(post_trace_index_list)
+    
+    # useful values
+    num_steps = pre_trace_record.shape[0]
+    time_steps = np.arange(0, num_steps, 1)*dt
+
+    fig,ax = plt.subplots(2, figsize=(12, 10), sharex=True)
+
+    ax[0].plot(time_steps, pre_trace_record, lw=1., alpha=0.05)
+    df = pd.DataFrame(pre_trace_record[:,pre_trace_index_list])
+    color = ['r','g', 'b']*int(n_pre/3)+['r']*int(n_pre%3)
+    df.plot(ax=ax[0], color = color, lw=1., alpha=1, legend=False)
+    #ax[0].plot(time_steps, , lw=1., alpha=1)#, color = 'r')
+    ax[0].set_title(f'Pre-synaptic traces - {n_pre} higlighted')
+    ax[0].set_xlabel(label_x)
+    ax[0].set_ylabel('Pre traces')
+
+    if n_post < 3:
+        ax[1].plot(time_steps, post_trace_record, lw=1., alpha=0.7)
+        ax[1].set_title('Post-synaptic traces')
+        ax[1].set_xlabel(label_x)
+        ax[1].set_ylabel('Post traces')
+    else:
+        ax[1].plot(time_steps, post_trace_record, lw=1., alpha=0.05)
+        df = pd.DataFrame(post_trace_record[:,post_trace_index_list])
+        color = ['r','g', 'b']*int(n_post/3)+['r']*int(n_post%3)
+        df.plot(ax=ax[1], color = color, lw=1., alpha=1, legend=False)
+        ax[1].set_title(f'Post-synaptic traces - {n_post} higlighted')
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+
+#########################################
+#                                       #
+#        INTERACTIVE PLOT UTILS         #
+#                                       # 
+#########################################
+
+
+
+
+def syn_plot(pars, syn, 
+             manual_update = True, 
+             time_step = 1, 
+             subsampling = False,   
+             time_in_ms = False):
+    """
+    Plot the weights changes during the simulation as graph and as distribution at a given time step
+
+    INPUT:
+    - pars: parameter of the simulation
+    - syn: synapse object containing the weights and the traces records
+    - manual_update: if True the plot is updated only when the button is pressed
+    - time_step: time step to plot the distribution
+    - subsampling: subsampling of the weights plot in time
+    - post_index: index of the post synaptic neuron
+    - time_in_ms: if True the x axis is in ms, otherwise in time steps
+
+    RETURN:
+    Interactive demo, Visualization of synaptic weights as graph and distribution at a given time step
+    """
+
+    # useful values
+    weights_history = syn.get_records()['W']
+    N_post = weights_history.shape[1]
+    num_steps = weights_history.shape[0]
+    
+
+    # check if we want the time in ms
+    if time_in_ms:
+        dt=pars['dt']
+        label_x = 'Time (ms)'
+    else:
+        dt=1
+        label_x = 'Time steps'
+
+    # time steps for the x axis
+    time_steps = np.arange(0, num_steps, 1)*dt
+
+    # set the default time step
+    if time_step is None:
+        time_step = num_steps-10
+    elif time_step > num_steps:
+        print(f'Time step must be less than {num_steps}')
+        return
+    
+    def main_plot(post_index, time_step = time_step, subsampling = False):
+        # check i f subsampling is less than the number of time steps
+        if subsampling:
+            s = num_steps//10
+        else:
+            s = 1
+
+        fig,ax = plt.subplots(2, figsize=(10, 8), gridspec_kw={'height_ratios': [1.5, 1]})#, sharex=True)
+
+        # plot the weights
+        x = time_steps[::s]
+        y = weights_history[ ::s,post_index,:]
+        ax[0].plot(x, y, lw=1., alpha=0.7)
+        ax[0].axvline(time_step, 0., 1., color='red', ls='--')
+        ax[0].set_xlabel(label_x)
+        ax[0].set_ylabel('Weight')
+
+
+        # plot the weights distribution
+        w_min = np.min(weights_history[time_step,:])-0.1
+        w_max = np.max(weights_history[time_step,:])+0.1
+        width = (w_max - w_min)/51
+        bins = np.arange(w_min, w_max, width)
+        #g_dis, _ = np.histogram(weights_history[time_step,:], bins)
+        #ax[1].bar(bins[1:], g_dis, color='b', alpha=0.5, width=width)
+        ax[1].hist(weights_history[time_step,post_index,:], bins, color='b', alpha=0.5, facecolor = '#2ab0ff', edgecolor='#169acf', linewidth=0.5)
+        ax[1].set_xlabel('weights ditribution')
+        ax[1].set_ylabel('Number')
+        #ax[1].set_title(f'Time step: {time_step}')
+        plt.tight_layout()
+        plt.show()
+        return
+
+    my_layout.width = '620px'
+
+
+    interactive_plot = widgets.interactive(main_plot, 
+                                            {'manual': manual_update, 'manual_name': 'Update plots'},
+                                            post_index=widgets.IntSlider(
+                                                min=0,
+                                                max=N_post-1,
+                                                step=1,
+                                                layout=my_layout),
+                                            time_step=widgets.IntSlider(
+                                                value=time_step, 
+                                                min=0, 
+                                                max=num_steps, 
+                                                step=num_steps//100,
+                                                description='Time step',
+                                                layout=my_layout),
+                                            subsampling=subsampling)
+    #output = interactive_plot.children[-1]
+    #output.layout.height = '400px'    
+    return interactive_plot
+ 
+
+
+
+def STDP_interactive_plot(pars_function, I, N_post = 10,
+                          manual_update = True, 
+                          time_in_ms = False,
+                          highlight = [],
+                          my_seed = 2024,
+                          ):
+    """
+    Interactive plot to simulate the STDP learning rule given an input.
+
+    ARGS:
+    - pars_function: function that returns the parameters of the simulation (interactive changable):
+
+        parameters of the neurons interactive changable:
+        - dynamic_threshold: if True the threshold of the neurons is dynamic
+        - hard_reset: if True the neurons have a hard reset
+        - tau_m: membrane time constant
+        parameters of the weight update rule  interactive changable:
+        - A_plus and A_minus: parameters of the STDP rule
+        - tau_plus and tau_minus: time constants of the STDP rule
+
+    - I: input to the network (num_steps, N_pre) array of 0,1 fixed
+    - N_post: number of post-synaptic neurons
+    - manual_update: if True the plot is updated only when the button is pressed
+    - time_in_ms: if True the x axis is in ms, otherwise in time steps
+    - highlight: list of indexes of the pre-synaptic neurons to higlight in the plots
+    - my_seed: seed for the random number generator
+
+    RETURN:
+    Interactive demo, Visualization of synaptic weights and neurons traces
+    """
+    num_steps = I.shape[0]
+    N_pre = I.shape[1]
+    # check if we want the time in ms
+    temp_pars = pars_function()
+    if time_in_ms:
+        dt=temp_pars['dt']
+        label_x = 'Time (ms)'
+    else:
+        dt=1
+        label_x = 'Time steps'
+
+    # time steps for the x axis
+    time_steps = np.arange(0, num_steps, 1)*dt
+
+    # set the seed
+    np.random.seed(my_seed)
+
+    def main_plot(
+            type_parameters = 'simple',
+            time_step = 1,
+            post_index = 0,  
+            dynamic_threshold = False,
+            hard_reset = True,
+            tau_m = 20,
+            A_plus = 0.01,
+            A_minus = 0.011,
+            tau_plus = 20,
+            tau_minus = 20,
+        ):
+        
+        
+        # inlcude all the plot from the post_synaptic neuron
+        neuron_plot = 'Mem & Spk' # or 'Spikes'
+
+        pars = pars_function(type_parameters = type_parameters,
+                             A_plus = A_plus, A_minus = A_minus, 
+                             tau_m = tau_m,
+                             tau_plus = tau_plus, tau_minus = tau_minus,
+                             dynamic_threshold = dynamic_threshold,
+                             hard_reset = hard_reset)
+        
+        neurons, syn = simulation(pars, I, neuron_type = LIFNeuron, weight_rule = STDP_synapse, N_post = N_post)
+                
+        selected_neuron = neurons[post_index]
+        if neuron_plot == 'Spikes':
+            post_spk_train = selected_neuron.get_records()['spk']
+            n_figure = 3
+            height_ratios = [4, 3, 1]
+            fig_height = 10
+        elif neuron_plot == 'Mem & Spk':
+            post_spk_train = selected_neuron.get_records()['spk']
+            mem = selected_neuron.get_records()['mem']
+            if selected_neuron.dynamic_threshold:
+                thr_records = selected_neuron.get_records()['thr']
+            n_figure = 4
+            height_ratios = [4, 3, 3, 1]
+            fig_height = 12
+        else:
+            n_figure = 2
+            height_ratios = [4, 3]
+            fig_height = 8
+
+        weights_history = syn.get_records()['W']
+        
+        s = 1 # subsampling seems not be usefull
+        
+        fig,ax = plt.subplots(n_figure, figsize=(10, fig_height), gridspec_kw={'height_ratios': height_ratios})#, sharex=True)
+
+        # plot the weights
+        x = time_steps[::s]
+        y = weights_history[1 ::s,post_index,:]
+        if len(highlight) > 0:
+            alpha = 1/(N_pre-len(highlight)) + 0.05
+            alpha1 = alpha/N_pre * len(highlight) + 0.1
+            alpha2 = alpha/N_pre * (N_pre-len(highlight))
+            mask = np.isin(np.arange(N_pre), highlight)
+            df1 = pd.DataFrame(y[:,mask])
+            df1.plot(ax=ax[0], color = 'r', lw=1., alpha=alpha1, legend=False)
+            df2 = pd.DataFrame(y[:,~mask])
+            df2.plot(ax=ax[0], color = 'b', lw=1., alpha=alpha2, legend=False)
+        else:
+            ax[0].plot(x, y, lw=1.)
+        ax[0].axvline(time_step, 0., 1., color='red', ls='--')
+        if pars['constrain'] == 'Dynamic':
+            ax[0].axhline(syn.w_max, 0., 1., color='green', ls='--')
+            ax[0].axhline(syn.w_min, 0., 1., color='green', ls='--')
+        ax[0].set_xlabel(label_x)
+        ax[0].set_ylabel('Weight')
+
+
+        # plot the weights distribution
+        w_min = np.min(weights_history[time_step,:])-0.1
+        w_max = np.max(weights_history[time_step,:])+0.1
+        width = (w_max - w_min)/51
+        bins = np.arange(w_min, w_max, width)
+        if len(highlight) > 0:
+            ax[1].hist(weights_history[time_step,post_index,mask], bins, color='r', alpha=0.8,  linewidth=0.5)
+            ax[1].hist(weights_history[time_step,post_index,~mask], bins, color='b', alpha=0.4, linewidth=0.5)
+        else:
+            ax[1].hist(weights_history[time_step,post_index,:], bins, color='b', alpha=0.5, facecolor = '#2ab0ff', edgecolor='#169acf', linewidth=0.5)
+        ax[1].set_xlabel(f'weights ditribution of neuron {post_index} at time step {time_step}')
+        ax[1].set_ylabel('Number')
+        #ax[1].set_title(f'Time step: {time_step}')
+
+        if neuron_plot == 'Mem & Spk':
+            # plot the membrane potential
+            ax[2].plot(time_steps, mem)
+            ax[2].set_ylabel("Membrane Potential ($U_{mem}$)")
+            if selected_neuron.dynamic_threshold:
+                ax[2].plot(time_steps, thr_records, c="red", linestyle="dashed", alpha=0.7, label="Threshold")
+            else:
+                ax[2].axhline(y=selected_neuron.threshold, alpha=0.5, linestyle="dashed", c="red", linewidth=2, label="Threshold")
+            ax[2].legend( loc="best")
+            plt.xlabel(label_x)
+
+            # plot the spikes
+            ax[3].eventplot(np.array(np.where(post_spk_train==1))*dt, color="black", linelengths=0.5, linewidths=1)
+            ax[3].set_xlim(ax[0].get_xlim())
+            ax[3].set_ylabel("Output spikes")
+            ax[3].set_xlabel(label_x)
+            plt.yticks([])
+        elif neuron_plot == 'Spikes':
+            # plot the spikes
+            spk_times = np.array(np.where(post_spk_train==1))*dt
+            ax[2].eventplot(spk_times, color="black", linelengths=0.5, linewidths=1)
+            ax[2].set_xlim(ax[0].get_xlim())
+            ax[2].set_ylabel("Output spikes")
+            ax[2].set_xlabel(label_x)
+            plt.yticks([])
+        else:
+            print(neuron_plot)
+
+        plt.tight_layout()
+        plt.show()
+        return 
+
+
+    # WIDGET CONSTRUCTION
+
+    
+    A_plus_widget = widgets.FloatLogSlider(
+         value=0.08,
+         base=2,
+         min=-10, # max exponent of base
+         max=10, # min exponent of base
+         step=0.5, # exponent step
+         description='A_plus',
+         layout=widgets.Layout(width='400px'),
+         tooltip = 'A_plus value for STDP',
+         continuous_update=False
+    )
+    A_minus_widget = widgets.FloatLogSlider(
+         value=0.081,
+         base=2,
+         min=-10, # max exponent of base
+         max=10, # min exponent of base
+         step=0.5, # exponent step
+         description='A_minus',
+         layout=widgets.Layout(width='400px'),
+         tooltip = 'A_minus value for STDP',
+         continuous_update=False
+    )
+    tau_m_widget = widgets.FloatSlider(
+         value=20,
+         min=0.1,
+         max=1000,
+         step=1,
+         description='tau_m',
+         layout=widgets.Layout(width='600px'),
+         tooltip = 'Membrane time constant',
+    )
+    tau_plus_widget = widgets.FloatSlider(
+         value=20,
+         min=1,
+         max=1000,
+         step=1,
+         description='tau_plus',
+         layout=widgets.Layout(width='400px'),
+         tooltip = 'STDP potentiation time constant',
+    )
+    tau_minus_widget = widgets.FloatSlider(
+         value=20,
+         min=0.1,
+         max=1000,
+         step=1,
+         description='tau_minus',
+         layout=widgets.Layout(width='400px'),
+         tooltip = 'STDP depression time constant',
+    )
+
+
+    my_layout.width = '600px'
+    interactive_plot = widgets.interactive(
+        main_plot,
+        {'manual': manual_update, 'manual_name': 'Update plot'},
+        time_step=widgets.IntSlider(
+            min=0, 
+            max=num_steps, 
+            value = num_steps-1,
+            step=num_steps//100,
+            description = 'Time step',
+            layout=my_layout,
+            continuous_update=False
+        ),
+        post_index = widgets.IntSlider(
+            min = 0,
+            max = N_post-1,
+            step = 1,
+            layout=my_layout,
+            continuous_update=False
+        ),
+        dynamic_threshold = widgets.Checkbox(
+            value = False,
+            description='Dynamic threshold for the neurons',
+            disabled=False,
+            indent=False
+        ),
+        hard_reset = widgets.Checkbox(
+            value=False,
+            description='Hard reset for the neurons',
+            disabled=False,
+            indent=False
+        ),
+        tau_m = tau_m_widget,
+        A_plus = A_plus_widget,
+        A_minus = A_minus_widget,
+        tau_plus = tau_plus_widget,
+        tau_minus = tau_minus_widget,
+    )
+    
+    pre = interactive_plot.children[:2]
+    controls_neuron = widgets.HBox(interactive_plot.children[2:4])
+    controls_tau_m = interactive_plot.children[4]
+    controls_A = widgets.HBox(interactive_plot.children[5:7])
+    controls_tau_stdp = widgets.HBox(interactive_plot.children[7:9])
+    output = interactive_plot.children[9:]
+
+    final_widget = widgets.VBox([*pre, controls_neuron, controls_tau_m, controls_A , controls_tau_stdp, *output])
+    #final_widget = interactive_plot
+    #output = interactive_plot.children[-1]
+    #output.layout.height = '350px'
+    return final_widget
+
+
+

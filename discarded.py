@@ -202,3 +202,134 @@ def STDP_rule(
     W =  W + A_plus*np.outer(post_syn_spk,pre_syn_trace) - A_minus*np.outer(post_syn_trace,pre_syn_spk)
 
     return W, [pre_syn_trace, post_syn_trace]
+
+
+
+
+    def simple_pars(**kwargs):
+    '''
+    Define the default parameters
+    values come from COURSE 2 
+    '''
+
+    pars = {}
+
+    # typical neuron parameters
+    pars['threshold'] = 1.    # spike threshold [mV]
+    pars['tau_m'] = 10.         # membrane time constant [ms]
+    pars['R'] = 1            # leak resistance [Ohm] with this resistance input current must be of the order of 100 mV
+    pars['U_init'] = 0.       # initial potential [mV]
+    pars['U_reset'] = 0.      # reset potential [mV]
+    pars['U_resting'] = 0.    # leak reversal potential [mV]
+    pars['t_ref'] = 2.          # refractory time (ms)
+
+    # in the case of dynamic threshold
+    pars['tau_thr'] = 20         # threshold time constant [ms]
+    pars['ratio_thr'] = 1.1     # relative increment in the threshold due to a spike
+
+    # in the case of soft reset
+    ## ?? some way to lower the membrane potential not to a constant value
+
+    # random seed
+    pars['my_seed'] = 42
+
+    # time steps
+    pars['dt'] = 1             # simulation time step [ms]
+
+    # for Poisson models
+    pars['alpha'] = 0.1          # scaling factor for the membrane to the rate
+
+    # STDP parameters
+    pars['A_plus'] = 0.008                   # magnitude of LTP
+    pars['A_minus'] = pars['A_plus'] * 1.10  # magnitude of LTD 
+    pars['tau_plus'] = 20                    # LTP time constant [ms]
+    pars['tau_minus'] = pars['tau_plus']     # LTD time constant [ms]
+
+    # weight parameters
+    pars['w_max'] = 1.            # maximum weight
+    pars['w_min'] = 0.            # minimum weight
+
+
+    # external parameters if any #
+    for k in kwargs:
+        pars[k] = kwargs[k]
+
+    return pars
+
+s_pars = simple_pars()
+
+
+
+    w_max_widget = widgets.FloatSlider(
+         value=5,
+         min=0,
+         max=60,
+         step=1,
+         description='w_max',
+         layout=widgets.Layout(width='400px'),
+         tooltip = 'Maximum weight value  for STDP',
+         continuous_update=False
+    )
+    w_min_widget = widgets.FloatSlider(
+         value=0,
+         min=-40,
+         max=20,
+         step=1,
+         description='w_min',
+         layout=widgets.Layout(width='400px'),
+         tooltip = 'Minimum weight value  for STDP',
+         continuous_update=False
+    )
+
+
+    
+    R_widget = widgets.FloatLogSlider(
+        value = 1,
+        base = 2,
+        min = -10,
+        max = 6,
+        step = 0.5,
+        description = 'R',
+        layout = widgets.Layout(width='400px'),
+        tooltip = 'Resistence of the membrane',
+        continuous_update=False
+    )
+
+
+constrain = widgets.ToggleButtons(
+            options = ['None','Hard', 'Dynamic'],
+            value = 'None',
+            description = 'Constrain on the weights',
+            disabled = False,
+            button_style='', # 'success', 'info', 'warning', 'danger' or ''
+            tooltips = ['No constrain', 'Hard constrain', 'Dynamic constrain'],
+        )
+
+        neuron_plot = widgets.ToggleButtons(
+            options = ['None', 'Spikes', 'Mem & Spk'],
+            value = 'None',
+            description = 'Selected Neuron plots',
+            disabled = False,
+            button_style='', # 'success', 'info', 'warning', 'danger' or ''
+            tooltips = ['No neuron plot', 'Spikes train in output plot', 'Membrane and spikes plots'],
+        ),
+
+        short_memory_trace = widgets.Checkbox(
+            value=False,
+            description='Short memory trace for STDP',
+            disabled=False,
+            indent=False
+        ),
+
+
+    dynamic_weight_exponent_widget = widgets.FloatLogSlider(
+         value=0.01,
+         base=2,
+         min=-10, # max exponent of base
+         max=2, # min exponent of base
+         step=0.5, # exponent step
+         description='Exponent',
+         layout=widgets.Layout(width='400px'),
+         tooltip = 'Exponent for the dynamic weight constrain',
+         continuous_update=False
+    )

@@ -29,12 +29,7 @@ plt.style.use('seaborn-v0_8')
 
 class LIFNeuron:
 
-    def __init__(self, pars, 
-                 refractory_time = False,  
-                 dynamic_threshold = False,   
-                 hard_reset = True,           
-                 noisy_input = False,
-                 **kwargs):
+    def __init__(self, pars, **kwargs):
         """
         - pars: parameter dictionary
         - refractory_time: boolean, if True the neuron has a refractory period
@@ -51,10 +46,10 @@ class LIFNeuron:
         self.mem = self.pars['U_init']
 
         # user defined attributes
-        self.hard_reset = hard_reset
-        self.refractory_time = refractory_time
-        self.dynamic_threshold = dynamic_threshold
-        self.noisy_input = noisy_input
+        self.hard_reset = self.pars['hard_reset']
+        self.refractory_time = self.pars['refractory_time']
+        self.dynamic_threshold = self.pars['dynamic_threshold']
+        self.noisy_input = self.pars['noisy_input']
         
         # additional attributes
         for key, value in kwargs.items():
@@ -123,7 +118,7 @@ class LIFNeuron:
 
         # update the membrane potential:
         # exponential decay
-        self.mem  *= (1-dt/self.tau_m)
+        self.mem = self.mem * (1-dt/self.tau_m)
         # decaying towards the resting potential
         self.mem += dt/self.tau_m * self.U_resting 
         # add the contribution due to the incoming current
@@ -142,7 +137,7 @@ class LIFNeuron:
 
 
         
-        return self.mem, spk
+        return self.mem, int(spk)
 
     def get_records(self):
         if self.dynamic_threshold:
@@ -210,11 +205,7 @@ class PoissonNeuron:
 
  
 
-    def __init__(self, pars, 
-                 refractory_time = False,  
-                 dynamic_threshold = False,   
-                 hard_reset = True,
-                 **kwargs):
+    def __init__(self, pars, **kwargs):
         """
         - pars: parameter dictionary
         - refractory_time: boolean, if True the neuron has a refractory period
@@ -230,10 +221,9 @@ class PoissonNeuron:
         self.mem = self.pars['U_init']
 
         # user defined attributes
-        self.refractory_time = refractory_time
-        self.dynamic_threshold = dynamic_threshold
-        self.hard_reset = hard_reset
-        
+        self.refractory_time = self.pars['refractory_time']
+        self.dynamic_threshold = self.pars['dynamic_threshold']
+        self.hard_reset = self.pars['hard_reset']        
 
         # additional attributes
         for key, value in kwargs.items():

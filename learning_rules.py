@@ -23,14 +23,8 @@ my_layout.width = '620px'
 
 class STDP_synapse:
 
-    def __init__(self, pars, N_pre, N_post,
-                 W_init = None,
-                 hard_constrain = True, 
-                 short_memory_trace = False,
-                 seed=None):
-        # Set random seed
-        if seed is not None:
-            np.random.seed(seed)
+    def __init__(self, pars, N_pre, N_post, W_init = None, **kwargs):
+        
         
         # base attributes
         self.pars = pars
@@ -41,17 +35,30 @@ class STDP_synapse:
         self.A_minus = self.pars['A_minus']
         self.tau_plus = self.pars['tau_plus']
         self.tau_minus = self.pars['tau_minus']
+        self.synaptic_decay = self.pars['synaptic_decay']
 
         # user defined attributes
         self.N_pre = N_pre
         self.N_post = N_post
-        self.hard_constrain = hard_constrain
-        self.short_memory_trace = short_memory_trace
+        constrain = self.pars.get('constrain', 'Hard')
+        if constrain not in ['None', 'Hard', 'Dynamic']:
+            print('constrain must be either None, Hard or Dynamic')
+            print('constrain set to None')
+            constrain = 'None'
+            return
+        self.constrain = constrain
+        self.short_memory_trace = self.pars.get('short_memory_trace', False)
+
+        # additional attributes
+        for key, value in kwargs.items():
+            setattr(self, key, value)        
 
         # Initialize weights and traces
         if W_init is not None:
             self.W = W_init
         else:
+            # Set random seed
+            np.random.seed(42)
             self.W = np.random.random(N_post, N_pre)
         self.traces = [np.zeros(N_pre), np.zeros(N_post)]
 
@@ -89,17 +96,18 @@ class STDP_synapse:
         # update the weights
         LTP = self.A_plus *  np.outer(post_spk_vector,pre_trace)
         LTD = self.A_minus *  np.outer(post_trace,pre_spk_vector)
-        self.W = self.W + LTP - LTD
+        self.W = self.W + LTP - LTD + self.synaptic_decay * self.pars['dt'] / self.pars['tau_syn'] * (self.w_min - self.W)
 
         # weigths constrain
-        if self.hard_constrain == 'None':
+        if self.constrain == 'None':
             self.W = self.W
-        elif self.hard_constrain == True:
+        elif self.constrain == 'Hard':
             self.W = np.clip(self.W, self.w_min, self.w_max)
-        else:
+        elif self.constrain == 'Dynamic':
             # dynamic weight constraint based on the current weight
-            self.A_plus = self.pars['A_plus'] * (self.w_max - self.W)**self.pars.get('dynamic_weight_exponent',1)
-            self.A_minus = self.pars['A_minus'] * (self.W - self.w_min)**self.pars.get('dynamic_weight_exponent',1)
+            # there are some problems with the sign of the weights and the exponentiation
+            self.A_plus = self.pars['A_plus'] * (np.absolute(self.w_max - self.W))**self.pars.get('dynamic_weight_exponent',1)*np.sign(self.w_max - self.W)
+            self.A_minus = self.pars['A_minus'] * (np.absolute(self.W - self.w_min))**self.pars.get('dynamic_weight_exponent',1)*np.sign(self.W - self.w_min)
             
         #store the values
         self.pre_traces_records.append(pre_trace)
@@ -107,11 +115,8 @@ class STDP_synapse:
         self.W_records.append(self.W)
 
     def get_records(self):
-        if self.hard_constrain:
-            return {'W':np.array(self.W_records), 'pre_trace':np.array(self.pre_traces_records),'post_trace':np.array(self.post_traces_records)}
-        else:
-            # print("to be implemented")
-            return {'W':np.array(self.W_records), 'pre_trace':np.array(self.pre_traces_records),'post_trace':np.array(self.post_traces_records)}
+        # should I return different records for different constraints?
+        return {'W':np.array(self.W_records), 'pre_trace':np.array(self.pre_traces_records),'post_trace':np.array(self.post_traces_records)}
     
     def reset_records(self):
         self.W_records = []
@@ -149,14 +154,19 @@ class STDP_synapse:
         # initialize the figure
         fig,ax = plt.subplots(4, figsize=(12, 14), gridspec_kw={'height_ratios': [1, 2, 2, 2]})#, sharex=True)
 
+        # plot the weights as an image
         fig.colorbar(ax[0].imshow(W.T, cmap = 'viridis', aspect='auto'), ax=ax[0], orientation='vertical', fraction = 0.01, pad = 0.01)
         ax[0].set_xlabel(label_x)
         ax[0].grid(False)
         ax[0].set_ylabel('Synaptic weights')
         ax[0].set_title(f'Post-synaptic neuron: {post_index}')
         
-
+        # plot the weights as a line plot
         ax[1].plot(time_steps[::subsampling], W[ ::subsampling,:], lw=1., alpha=0.7)
+        # plot orizontal lines for the weight limits
+        if self.constrain == 'Dynamic':
+            ax[1].axhline(self.w_max, color='r', linestyle='--', lw=1)
+            
         ax[1].set_xlabel(label_x)
         ax[1].set_ylabel('Weight')
 
