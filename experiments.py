@@ -71,6 +71,12 @@ def default_pars(type_parameters = 'simple', **kwargs):
     pars['U_resting'] = 0. if s else -75.    # leak reversal potential [mV]    !do not change
     pars['t_ref'] = 2. if s else 5.          # refractory time (ms)
 
+    # neuron parameters for conductance based model
+    pars['tau_syn_exc'] = 10. if s else 5.       # synaptic time constant [ms]
+    pars['tau_syn_inh'] = 10. if s else 5.       # synaptic time constant [ms]
+    pars['U_rev_exc'] = 1. if s else 10.        # excitatory reversal potential [mV]
+    pars['U_rev_inh'] = -80. if s else -80.    # inhibitory reversal potential [mV]
+
     # in the case of dynamic threshold
     pars['tau_thr'] = 20                     # threshold time constant [ms]
     pars['ratio_thr'] = 1.5 if s else 1.1    # relative increment in the threshold due to a spike
@@ -93,22 +99,23 @@ def default_pars(type_parameters = 'simple', **kwargs):
     pars['tau_plus'] = 20                    # LTP time constant [ms]
     pars['tau_minus'] = pars['tau_plus']     # LTD time constant [ms]
     pars['tau_syn'] = 5. if s else 10.       # synaptic time constant [ms] if synaptic decay is used
-    pars['dynamic_weight_exponent'] = 0.01     # exponent for the dynamic weight constraint
+    pars['dynamic_weight_exponent'] = 0.01   # exponent for the dynamic weight constraint
 
     # weight parameters
-    pars['w_max'] = 1.                       # maximum weight
+    pars['w_max'] = 1. if s else 0.024       # maximum weight
     pars['w_min'] = 0.                       # minimum weight
-    
-    # weigths update rule parameters
-    pars['synaptic_decay'] = 0. if s else 1. # synaptic decay factor
-    pars['constrain'] = 'Hard'               # weight constrain
-    pars['short_memory_trace'] = False       # short memory trace for the traces
+    pars['w_init_value'] = 1 if s else 0.012 # initial value for the weights
 
     # neuron initialization parameters
-    pars['refractory_time'] = False,  
+    pars['refractory_time'] = False if s else True,
     pars['dynamic_threshold'] = False,
     pars['hard_reset'] = True,
-    pars['noisy_input'] = False,
+    pars['conductance_based'] = False if s else True,
+
+    # weights update rule parameters
+    pars['synaptic_decay'] = False # synaptic decay factor
+    pars['constrain'] = 'Hard'               # weight constrain
+    pars['short_memory_trace'] = False       # short memory trace for the traces
 
     # external parameters if any #
     for k in kwargs:
@@ -126,13 +133,61 @@ def default_pars(type_parameters = 'simple', **kwargs):
 
 
 
+def weight_initializer(pars, I, N_post, my_seed = 2024, type_init = 3):
+
+    """
+    ARGS:
+    - I: input spike train with shape (num_steps, N_pre)
+    - N_post: number of post-synaptic neurons
+    - my_seed: seed for random number generation
+    RETURNS:
+    - W: initial weights with shape (N_pre, N_post)
+    """
+
+    N_pre = np.shape(I)[1]
+
+    # set random seed
+    if my_seed:
+        np.random.seed(seed=my_seed)
+
+    if type_init == 1:
+        # compute the mean fire rate for each pre-synaptic neuron
+        mean_rate = np.mean(I, axis = 0)+1e-4
+        
+        # define the mean vector for the weights as inverse of the mean rate
+        mean_vector = 1.5/mean_rate
+
+        # divide by the pre-synaptic number of neurons
+        mean_vector = mean_vector/N_pre
+
+        print(f'mean vector max:{mean_vector.max()}')
+
+        # initialize the weights as uniform random variables between 0 and 2 * mean_vector
+        W = np.random.uniform(0, 2*mean_vector, (N_post, N_pre))
+
+        # clip _between 0 and 1
+        W = np.clip(W, 0, 1)
+
+    elif type_init == 2:
+        mean_rate = np.mean(I)+1e-4
+        mean_value = 1.5/(mean_rate*N_pre)
+        W = np.random.uniform(0, 2*mean_value, (N_post, N_pre))
+        W = np.clip(W, 0, 1)
+
+    elif type_init == 3:
+        W = np.ones((N_post, N_pre)) * pars['w_init_value']
+
+    return W
+
+
+
 def simulation(
         pars,
-        spk_input,                 
+        spk_input,
+        W_init,                 
         neuron_type = LIFNeuron,  
         N_post = 1,                
         weight_rule = None, 
-        W_init = None,      
         my_seed = 2024,            
         ):
     """
@@ -160,18 +215,12 @@ def simulation(
     
 
     # Initialize the weights
-    if W_init is None:
-        np.random.seed(my_seed)
-        W_init = np.random.rand(N_post, N_pre)
-        W = W_init
-    else:
-        W = W_init 
+    W = W_init
 
 
     # Initialize the synapses with the given update rule
     if weight_rule is not None:
         my_synapses = weight_rule(pars, N_pre, N_post, W_init = W )
-    
 
 
     # start the simulation
@@ -204,7 +253,18 @@ def simulation(
 ##########################################
 
 
-
+def repeat_ones(num_steps, N_pre, silent_time ):
+    """
+    ARGS:
+    - num_steps: number of time steps
+    - N_pre: number of pre-synaptic neurons
+    - silent_time: time steps for the silent period
+    RETURNS:
+    - I: input spike train with all ones for the first silent_time and zeros for the remaining time
+    """
+    I = np.zeros((num_steps, N_pre))
+    I[::silent_time, :] = 1
+    return I
 
 
 
@@ -289,6 +349,9 @@ def random_shifted_trains(dt,
     # set random seed
     if my_seed:
         np.random.seed(seed=my_seed)
+
+    if N_pre_correlated is None:
+        N_pre_correlated = N_pre//2
     
     # check that the number of correlated neurons is less than the total number of neurons
     if N_pre_correlated > N_pre:
@@ -324,7 +387,7 @@ def random_shifted_trains(dt,
 
 
 
-def random_offsets(dt, num_steps, N_pre, rate = 0.5, sections = 10, sort_shifts =True, length_ratio = 0.5):
+def random_offsets(dt, num_steps, N_pre, rate = 0.5, sections = 10, sort_shifts = True, length_ratio = 0.5):
 
     # check the length_ratio
     if length_ratio > 1:
@@ -334,7 +397,7 @@ def random_offsets(dt, num_steps, N_pre, rate = 0.5, sections = 10, sort_shifts 
 
     # generate the random 
     original_length = int(num_steps*length_ratio)
-    I_original = Poisson_generator(dt, rate = rate, n = N_pre, num_steps = original_length)
+    I = Poisson_generator(dt, rate = rate, n = N_pre, num_steps = original_length)
 
     # generate random offsets
     shift_values = np.random.randint(0,sections,N_pre)*(num_steps-original_length)//(sections-1)
@@ -343,14 +406,14 @@ def random_offsets(dt, num_steps, N_pre, rate = 0.5, sections = 10, sort_shifts 
     if sort_shifts:
         shift_values = np.sort(shift_values)
 
-    I = np.concatenate([I_original, np.zeros((num_steps-original_length,N_pre))], axis=0)
+    I_original = np.concatenate([I, np.zeros((num_steps-original_length,N_pre))], axis=0)
     I_shifted = np.zeros((num_steps,N_pre))
     for i in range(N_pre):
-        I_shifted[:,i] = np.roll(I[:,i], shift_values[i])
+        I_shifted[:,i] = np.roll(I_original[:,i], shift_values[i])
 
     first_section_index = np.where(shift_values == np.min(shift_values))[0]
 
-    return I,I_shifted, first_section_index
+    return I_shifted, I_original, first_section_index
 
 
 

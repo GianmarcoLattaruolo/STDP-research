@@ -333,3 +333,146 @@ constrain = widgets.ToggleButtons(
          tooltip = 'Exponent for the dynamic weight constrain',
          continuous_update=False
     )
+
+
+N_pre = 100
+num_steps = 1000
+N_post = 100
+
+I = np.concatenate([np.round(np.random.random((num_steps//3,N_pre))), np.round(np.random.random((num_steps//3,N_pre))-0.30),np.round(np.random.random((num_steps//3,N_pre)))], axis=0) 
+pars = default_pars(R = 1, tau_thr = 40, ratio_thr = 1.5,
+                    refractory_time = True, 
+                    dynamic_threshold = True, 
+                    hard_reset = False)
+
+# first simulation
+neurons = simulation(pars , N_post = N_post, spk_input= I , neuron_type=LIFNeuron)
+
+post_spk = get_post_spk_trains(neurons)
+
+raster_plot(pars, pre_syn_spk = I, post_syn_spk = post_spk, title = 'Raster plot of the input and output spikes')
+
+# second simulation
+neurons = simulation(pars , N_post = N_post, spk_input= post_spk, neuron_type=LIFNeuron)
+
+post_spk_2 = get_post_spk_trains(neurons)
+
+raster_plot(pars, pre_syn_spk = post_spk, post_syn_spk = post_spk_2, title = 'Raster plot of second output spikes', pre_syn_plot=False)
+
+# third simulation
+neurons = simulation(pars , N_post = N_post, spk_input= post_spk_2, neuron_type=LIFNeuron)
+
+post_spk_3 = get_post_spk_trains(neurons)
+
+raster_plot(pars, pre_syn_spk = post_spk_2, post_syn_spk = post_spk_3, title = 'Raster plot of third output spikes', pre_syn_plot=False)
+
+# fourth simulation
+neurons = simulation(pars , N_post = N_post, spk_input= post_spk_3, neuron_type=LIFNeuron)
+
+post_spk_4 = get_post_spk_trains(neurons)
+
+raster_plot(pars, pre_syn_spk = post_spk_3, post_syn_spk = post_spk_4, title = 'Raster plot of fourth output spikes', pre_syn_plot=False)
+
+
+
+def syn_plot(pars, syn, 
+             manual_update = True, 
+             time_step = 1, 
+             subsampling = False,   
+             time_in_ms = False):
+    """
+    Plot the weights changes during the simulation as graph and as distribution at a given time step
+
+    INPUT:
+    - pars: parameter of the simulation
+    - syn: synapse object containing the weights and the traces records
+    - manual_update: if True the plot is updated only when the button is pressed
+    - time_step: time step to plot the distribution
+    - subsampling: subsampling of the weights plot in time
+    - post_index: index of the post synaptic neuron
+    - time_in_ms: if True the x axis is in ms, otherwise in time steps
+
+    RETURN:
+    Interactive demo, Visualization of synaptic weights as graph and distribution at a given time step
+    """
+
+    # useful values
+    weights_history = syn.get_records()['W']
+    N_post = weights_history.shape[1]
+    num_steps = weights_history.shape[0]
+    
+
+    # check if we want the time in ms
+    if time_in_ms:
+        dt=pars['dt']
+        label_x = 'Time (ms)'
+    else:
+        dt=1
+        label_x = 'Time steps'
+
+    # time steps for the x axis
+    time_steps = np.arange(0, num_steps, 1)*dt
+
+    # set the default time step
+    if time_step is None:
+        time_step = num_steps-10
+    elif time_step > num_steps:
+        print(f'Time step must be less than {num_steps}')
+        return
+    
+    def main_plot(post_index, time_step = time_step, subsampling = False):
+        # check i f subsampling is less than the number of time steps
+        if subsampling:
+            s = num_steps//10
+        else:
+            s = 1
+
+        fig,ax = plt.subplots(2, figsize=(10, 8), gridspec_kw={'height_ratios': [1.5, 1]})#, sharex=True)
+
+        # plot the weights
+        x = time_steps[::s]
+        y = weights_history[ ::s,post_index,:]
+        ax[0].plot(x, y, lw=1., alpha=0.7)
+        ax[0].axvline(time_step, 0., 1., color='red', ls='--')
+        ax[0].set_xlabel(label_x)
+        ax[0].set_ylabel('Weight')
+
+
+        # plot the weights distribution
+        w_min = np.min(weights_history[time_step,:])-0.1
+        w_max = np.max(weights_history[time_step,:])+0.1
+        width = (w_max - w_min)/51
+        bins = np.arange(w_min, w_max, width)
+        #g_dis, _ = np.histogram(weights_history[time_step,:], bins)
+        #ax[1].bar(bins[1:], g_dis, color='b', alpha=0.5, width=width)
+        ax[1].hist(weights_history[time_step,post_index,:], bins, color='b', alpha=0.5, facecolor = '#2ab0ff', edgecolor='#169acf', linewidth=0.5)
+        ax[1].set_xlabel('weights ditribution')
+        ax[1].set_ylabel('Number')
+        #ax[1].set_title(f'Time step: {time_step}')
+        plt.tight_layout()
+        plt.show()
+        return
+
+    my_layout.width = '620px'
+
+
+    interactive_plot = widgets.interactive(main_plot, 
+                                            {'manual': manual_update, 'manual_name': 'Update plots'},
+                                            post_index=widgets.IntSlider(
+                                                min=0,
+                                                max=N_post-1,
+                                                step=1,
+                                                layout=my_layout),
+                                            time_step=widgets.IntSlider(
+                                                value=time_step, 
+                                                min=0, 
+                                                max=num_steps, 
+                                                step=num_steps//100,
+                                                description='Time step',
+                                                layout=my_layout),
+                                            subsampling=subsampling)
+    #output = interactive_plot.children[-1]
+    #output.layout.height = '400px'    
+    return interactive_plot
+ 
+

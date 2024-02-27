@@ -38,6 +38,11 @@ from learning_rules import *
 from plot_utils import *
 
 global simulation
+global Poisson_generator
+global half_growing_rate
+global random_shifted_trains
+global random_offsets
+global weight_initializer
 
 #########################################
 #                                       #
@@ -298,110 +303,240 @@ def plot_traces(pars, pre_trace_record, post_trace_record,
 
 
 
-def syn_plot(pars, syn, 
-             manual_update = True, 
-             time_step = 1, 
-             subsampling = False,   
-             time_in_ms = False):
+def LIF_interactive_plot(pars_function, N_pre, num_steps,
+                         
+                         type_parameters = 'simple',
+                         N_post = 1,
+                         post_index = 0,
+                         manual_update = True, 
+                         time_in_ms = False,
+                         my_seed = 2024,
+                        ):
     """
-    Plot the weights changes during the simulation as graph and as distribution at a given time step
+    ARGS:
 
-    INPUT:
-    - pars: parameter of the simulation
-    - syn: synapse object containing the weights and the traces records
-    - manual_update: if True the plot is updated only when the button is pressed
-    - time_step: time step to plot the distribution
-    - subsampling: subsampling of the weights plot in time
-    - post_index: index of the post synaptic neuron
-    - time_in_ms: if True the x axis is in ms, otherwise in time steps
 
     RETURN:
-    Interactive demo, Visualization of synaptic weights as graph and distribution at a given time step
     """
 
-    # useful values
-    weights_history = syn.get_records()['W']
-    N_post = weights_history.shape[1]
-    num_steps = weights_history.shape[0]
-    
-
     # check if we want the time in ms
+    temp_pars = pars_function()
     if time_in_ms:
-        dt=pars['dt']
+        dt=temp_pars['dt']
         label_x = 'Time (ms)'
     else:
         dt=1
         label_x = 'Time steps'
 
+    # check the post index and eventually reset
+    if post_index >= N_post:
+        print(f'Post index must be less than {N_post}')
+        post_index = N_post-1
+
+
     # time steps for the x axis
     time_steps = np.arange(0, num_steps, 1)*dt
 
-    # set the default time step
-    if time_step is None:
-        time_step = num_steps-10
-    elif time_step > num_steps:
-        print(f'Time step must be less than {num_steps}')
-        return
-    
-    def main_plot(post_index, time_step = time_step, subsampling = False):
-        # check i f subsampling is less than the number of time steps
-        if subsampling:
-            s = num_steps//10
+    # set the seed
+    np.random.seed(my_seed)
+
+    def main_plot(
+        I_type,
+        rate,
+        tau_m = 20,
+        refractory_time = True, 
+        dynamic_threshold = True, 
+        hard_reset = True,
+        show_fmp = False,
+        show_raster = False,
+        tau_thr = 20,
+        ratio_thr = 1.5,
+        t_ref = 2,
+    ):
+        pars = pars_function(type_parameters = 'simple',
+                             tau_m = tau_m,
+                             tau_thr = tau_thr,
+                             ratio_thr = ratio_thr,
+                             t_ref = t_ref,
+                             refractory_time = refractory_time,
+                             dynamic_threshold = dynamic_threshold,
+                             hard_reset = hard_reset)
+
+        dt = pars['dt']
+
+        if I_type == 'Poiss':
+            I = Poisson_generator(dt, rate = rate, n = N_pre, num_steps = num_steps)
+        elif I_type == 'Const':
+            I = np.ones((num_steps, N_pre)) 
+        elif I_type == 'Half':
+            I = half_growing_rate(dt, num_steps, N_pre, rate_ratio = 0.5) 
+        elif I_type == 'Shift':
+            I,_ = random_shifted_trains(dt, num_steps, N_pre, rate = rate)
+        elif I_type == 'Offsets':
+            I,_,_= random_offsets(dt, num_steps, N_pre, rate = rate)
         else:
-            s = 1
+            print('I_type not recognized')
+            print('I_type must be one of the following: Poiss, Const, Half, Shift, Offsets')
+            print('Returning the Random input')
+            I = Poisson_generator(dt, rate, n = N_pre, num_steps = num_steps)
+        
+        W_init = weight_initializer(pars, I, N_post)
+        neurons = simulation(pars, I, W_init = W_init,
+                              neuron_type = LIFNeuron, N_post = N_post)
 
-        fig,ax = plt.subplots(2, figsize=(10, 8), gridspec_kw={'height_ratios': [1.5, 1]})#, sharex=True)
+        neurons[post_index].plot_records(show_fmp = show_fmp)
 
-        # plot the weights
-        x = time_steps[::s]
-        y = weights_history[ ::s,post_index,:]
-        ax[0].plot(x, y, lw=1., alpha=0.7)
-        ax[0].axvline(time_step, 0., 1., color='red', ls='--')
-        ax[0].set_xlabel(label_x)
-        ax[0].set_ylabel('Weight')
+        if show_raster:
+            get_post_spk_trains = lambda neurons : np.array([neurons[i].get_records()['spk'] for i in range(len(neurons))]).T
+            raster_plot(pars, pre_syn_spk=I, post_syn_spk=get_post_spk_trains(neurons), title = 'Raster plot of the input and output spikes')
+
+        return 
+    
+    # WIDGET CONSTRUCTION
+
+    rate_widget = widgets.FloatSlider(
+            value=0.5,
+            min=0,
+            max=1,
+            step=0.01,
+            description='Rate',
+            layout=widgets.Layout(width='600px'),
+            tooltip = 'Rate of the input',
+            continuous_update=False
+        )
+    
+    I_type_widget = widgets.ToggleButtons(
+            options=['Poiss', 'Const', 'Half', 'Shift', 'Offsets'],
+            value='Poiss',
+            description='Input type:',
+            layout=widgets.Layout(width='800px'),
+            disabled=False,
+            tooltips =['Random Poisson trains', 'Constant', 'half growing rate', 'random shifted trains', 'random offsets']
+        )
+    
+    tau_m_widget = widgets.FloatSlider(
+            value=20,
+            min=1,
+            max=1000,
+            step=1,
+            description='tau_m',
+            layout=widgets.Layout(width='600px'),
+            tooltip = 'Membrane time constant',
+            continuous_update=False
+        )    
+
+    tau_thr_widget = widgets.FloatSlider(
+            value=20,
+            min=1,
+            max=1000,
+            step=1,
+            description='tau_thr',
+            layout=widgets.Layout(width='400px'),
+            tooltip = 'Threshold time constant',
+            continuous_update=False
+        )
+    
+    ratio_thr_widget = widgets.FloatSlider(
+            value=1.5,
+            min=1,
+            max=7,
+            step=0.1,
+            description='ratio_thr',
+            layout=widgets.Layout(width='400px'),
+            tooltip = 'Threshold ratio',
+            continuous_update=False
+        )
+    
+    t_ref_widget = widgets.IntSlider(
+            value=2,
+            min=1,
+            max=50,
+            step=1,
+            description='t_ref',
+            layout=widgets.Layout(width='400px'),
+            tooltip = 'Refractory time',
+            continuous_update=False
+        )
+    
+    refractory_time_widget = widgets.Checkbox(
+            value=False,
+            description='Refractory time',
+            disabled=False,
+            indent=False,
+            layout=widgets.Layout(width='200px'),
+        )
+    
+    dynamic_threshold_widget = widgets.Checkbox(
+            value=False,
+            description='Dynamic threshold',
+            disabled=False,
+            indent=False,
+            layout=widgets.Layout(width='200px'),
+        )
+    
+    hard_reset_widget = widgets.Checkbox(
+            value=True,
+            description='Hard reset',
+            disabled=False,
+            indent=False,
+            tooltip = 'if false the membrane resets by subtraction of the threshold value',
+            layout=widgets.Layout(width='200px'),
+        )
+    
+    show_fmp_widget = widgets.Checkbox(
+            value=False,
+            description='Show FMP',
+            disabled=False,
+            indent=False,
+            tooltip = 'if True the Free Membrane Potential is shown',
+            layout=widgets.Layout(width='200px'),
+        )
+    
+    show_raster_widget = widgets.Checkbox(
+            value=False,
+            description='Show Raster',
+            disabled=False,
+            indent=False,
+            tooltip = 'if True the Raster plot is shown',
+            layout=widgets.Layout(width='200px'),
+        )
+
+    my_layout.width = '600px'
+
+    interactive_plot = widgets.interactive(
+        main_plot,
+        {'manual': manual_update, 'manual_name': 'Update plot'},
+        type_parameters = widgets.fixed(type_parameters),
+        I_type = I_type_widget,
+        rate = rate_widget,
+        tau_m = tau_m_widget,
+        tau_thr = tau_thr_widget,
+        ratio_thr = ratio_thr_widget,
+        t_ref = t_ref_widget,
+        refractory_time = refractory_time_widget,
+        dynamic_threshold = dynamic_threshold_widget,
+        hard_reset = hard_reset_widget,
+        show_fmp = show_fmp_widget,
+        show_raster = show_raster_widget
+    )
+
+    pre = interactive_plot.children[:3]
+    controls_neuron = widgets.HBox(interactive_plot.children[3:8])
+    controls_1 = widgets.HBox(interactive_plot.children[8:10])
+    output = interactive_plot.children[10:]
 
 
-        # plot the weights distribution
-        w_min = np.min(weights_history[time_step,:])-0.1
-        w_max = np.max(weights_history[time_step,:])+0.1
-        width = (w_max - w_min)/51
-        bins = np.arange(w_min, w_max, width)
-        #g_dis, _ = np.histogram(weights_history[time_step,:], bins)
-        #ax[1].bar(bins[1:], g_dis, color='b', alpha=0.5, width=width)
-        ax[1].hist(weights_history[time_step,post_index,:], bins, color='b', alpha=0.5, facecolor = '#2ab0ff', edgecolor='#169acf', linewidth=0.5)
-        ax[1].set_xlabel('weights ditribution')
-        ax[1].set_ylabel('Number')
-        #ax[1].set_title(f'Time step: {time_step}')
-        plt.tight_layout()
-        plt.show()
-        return
+    final_widget = widgets.VBox([*pre, controls_neuron, controls_1, *output])
 
-    my_layout.width = '620px'
+    return final_widget
 
 
-    interactive_plot = widgets.interactive(main_plot, 
-                                            {'manual': manual_update, 'manual_name': 'Update plots'},
-                                            post_index=widgets.IntSlider(
-                                                min=0,
-                                                max=N_post-1,
-                                                step=1,
-                                                layout=my_layout),
-                                            time_step=widgets.IntSlider(
-                                                value=time_step, 
-                                                min=0, 
-                                                max=num_steps, 
-                                                step=num_steps//100,
-                                                description='Time step',
-                                                layout=my_layout),
-                                            subsampling=subsampling)
-    #output = interactive_plot.children[-1]
-    #output.layout.height = '400px'    
-    return interactive_plot
- 
 
 
 
 def STDP_interactive_plot(pars_function, I, N_post = 10,
+                          type_parameters = 'simple',
+                          neuron_type = LIFNeuron,                
                           manual_update = True, 
                           time_in_ms = False,
                           highlight = [],
@@ -449,17 +584,17 @@ def STDP_interactive_plot(pars_function, I, N_post = 10,
     np.random.seed(my_seed)
 
     def main_plot(
-            type_parameters = 'simple',
-            time_step = 1,
-            post_index = 0,  
-            dynamic_threshold = False,
-            hard_reset = True,
-            tau_m = 20,
-            A_plus = 0.01,
-            A_minus = 0.011,
-            tau_plus = 20,
-            tau_minus = 20,
-        ):
+        type_parameters = 'simple',
+        time_step = 1,
+        post_index = 0,  
+        dynamic_threshold = False,
+        hard_reset = True,
+        tau_m = 20,
+        A_plus = 0.01,
+        A_minus = 0.011,
+        tau_plus = 20,
+        tau_minus = 20,
+    ):
         
         
         # inlcude all the plot from the post_synaptic neuron
@@ -470,9 +605,12 @@ def STDP_interactive_plot(pars_function, I, N_post = 10,
                              tau_m = tau_m,
                              tau_plus = tau_plus, tau_minus = tau_minus,
                              dynamic_threshold = dynamic_threshold,
-                             hard_reset = hard_reset)
+                             hard_reset = hard_reset,
+                             refractory_time = False)
         
-        neurons, syn = simulation(pars, I, neuron_type = LIFNeuron, weight_rule = STDP_synapse, N_post = N_post)
+        W_init = weight_initializer(pars, I, N_post)
+
+        neurons, syn = simulation(pars, I, neuron_type = neuron_type, weight_rule = STDP_synapse, N_post = N_post, W_init = W_init)
                 
         selected_neuron = neurons[post_index]
         if neuron_plot == 'Spikes':
@@ -626,6 +764,7 @@ def STDP_interactive_plot(pars_function, I, N_post = 10,
     interactive_plot = widgets.interactive(
         main_plot,
         {'manual': manual_update, 'manual_name': 'Update plot'},
+        type_parameters = widgets.fixed(type_parameters),
         time_step=widgets.IntSlider(
             min=0, 
             max=num_steps, 
@@ -673,6 +812,4 @@ def STDP_interactive_plot(pars_function, I, N_post = 10,
     #output = interactive_plot.children[-1]
     #output.layout.height = '350px'
     return final_widget
-
-
 
