@@ -27,6 +27,10 @@ if main_dir not in sys.path:
     sys.path.append(main_dir)
 import importlib
 
+# machine learning libraries
+import torch
+import torch.nn as nn
+
 importlib.reload(importlib.import_module('neurons'))
 importlib.reload(importlib.import_module('learning_rules'))
 importlib.reload(importlib.import_module('plot_utils'))
@@ -68,14 +72,15 @@ def default_pars(type_parameters = 'simple', **kwargs):
     pars['R'] = 1 if s else 0.1              # leak resistance [Ohm] with this resistance input current must be of the order of 100 mV !do not change
     pars['U_init'] = 0. if s else -65.       # initial potential [mV]  !do not change
     pars['U_reset'] = 0. if s else -75.      # reset potential [mV]    !do not change
-    pars['U_resting'] = 0. if s else -75.    # leak reversal potential [mV]    !do not change
-    pars['t_ref'] = 2. if s else 5.          # refractory time (ms)
+    pars['U_resting'] = 0. if s else -75.    # leak reversal potential [mV]    !do not change  in Neuromatch course this is V_L
+    pars['t_ref'] = 0. if s else 2.          # refractory time (ms)
 
     # neuron parameters for conductance based model
-    pars['tau_syn_exc'] = 10. if s else 5.       # synaptic time constant [ms]
-    pars['tau_syn_inh'] = 10. if s else 5.       # synaptic time constant [ms]
-    pars['U_rev_exc'] = 1. if s else 10.        # excitatory reversal potential [mV]
-    pars['U_rev_inh'] = -80. if s else -80.    # inhibitory reversal potential [mV]
+    pars['tau_syn_exc'] = 10. if s else 5.   # synaptic time constant [ms]
+    pars['tau_syn_inh'] = 10. if s else 5.   # synaptic time constant [ms]
+    pars['U_rev_exc'] = 1. if s else 0.      # excitatory reversal potential [mV]
+    pars['U_rev_inh'] = -1. if s else -80.   # inhibitory reversal potential [mV]
+    pars['max_g'] = 1. if s else 0.024       # maximum synaptic conductance [nS]
 
     # in the case of dynamic threshold
     pars['tau_thr'] = 20                     # threshold time constant [ms]
@@ -89,31 +94,27 @@ def default_pars(type_parameters = 'simple', **kwargs):
 
     # time steps
     pars['dt'] = 1. if s else 0.1            # simulation time step [ms]  !do not change
-
-    # for Poisson neuron models
-    pars['alpha'] = 0.1                      # scaling factor for the membrane to the rate
+                      
 
     # STDP parameters
-    pars['A_plus'] = 0.02 if s else 0.8      # magnitude of LTP
-    pars['A_minus'] = 0.02                   # magnitude of LTD 
+    pars['A_plus'] = 0.02 if s else 0.008 * pars['max_g']    # magnitude of LTP
+    pars['A_minus'] = 0.02 if s else 0.0088 * pars['max_g']  # magnitude of LTD 
     pars['tau_plus'] = 20                    # LTP time constant [ms]
     pars['tau_minus'] = pars['tau_plus']     # LTD time constant [ms]
-    pars['tau_syn'] = 5. if s else 10.       # synaptic time constant [ms] if synaptic decay is used
+    pars['tau_syn'] = 5.                     # synaptic time constant [ms] if synaptic decay is used
     pars['dynamic_weight_exponent'] = 0.01   # exponent for the dynamic weight constraint
 
     # weight parameters
     pars['w_max'] = 1. if s else 0.024       # maximum weight
     pars['w_min'] = 0.                       # minimum weight
-    pars['w_init_value'] = 1 if s else 0.012 # initial value for the weights
+    pars['w_init_value'] = 0.5 if s else 0.012 # initial value for the weights
 
     # neuron initialization parameters
-    pars['refractory_time'] = False if s else True,
-    pars['dynamic_threshold'] = False,
-    pars['hard_reset'] = True,
-    pars['conductance_based'] = False if s else True,
+    pars['refractory_time'] = False if s else True
+    pars['dynamic_threshold'] = False
+    pars['hard_reset'] = True
 
     # weights update rule parameters
-    pars['synaptic_decay'] = False # synaptic decay factor
     pars['constrain'] = 'Hard'               # weight constrain
     pars['short_memory_trace'] = False       # short memory trace for the traces
 
@@ -133,7 +134,7 @@ def default_pars(type_parameters = 'simple', **kwargs):
 
 
 
-def weight_initializer(pars, I, N_post, my_seed = 2024, type_init = 3):
+def weight_initializer(pars, N_post, N_pre = None, I=None, my_seed = 2024, type_init = 3, tensor = False):
 
     """
     ARGS:
@@ -143,8 +144,21 @@ def weight_initializer(pars, I, N_post, my_seed = 2024, type_init = 3):
     RETURNS:
     - W: initial weights with shape (N_pre, N_post)
     """
+    if I is not None:
+        type_init = 3
 
-    N_pre = np.shape(I)[1]
+    if N_pre is None and I is not None:
+        N_pre = np.shape(I)[1]
+    elif N_pre is None and I is None:
+        print('The number of pre-synaptic neurons must be given')
+        return None
+    elif N_pre is not None and I is not None:
+        if N_pre != np.shape(I)[1]:
+            print('The number of pre-synaptic neurons must be the same as the number of columns of the input spike train')
+            return None
+    
+
+
 
     # set random seed
     if my_seed:
@@ -177,7 +191,7 @@ def weight_initializer(pars, I, N_post, my_seed = 2024, type_init = 3):
     elif type_init == 3:
         W = np.ones((N_post, N_pre)) * pars['w_init_value']
 
-    return W
+    return W if not tensor else torch.from_numpy(W.T).float()
 
 
 
@@ -268,13 +282,13 @@ def repeat_ones(num_steps, N_pre, silent_time ):
 
 
 
-def Poisson_generator(dt, rate, n, num_steps, myseed=False, herz_rate = False):
+def Poisson_generator(dt, rate, N_pre, num_steps, myseed=False, herz_rate = False, batch_size = 0):
     """Generates poisson trains
 
     Args:
     pars            : parameter dictionary
     rate            : float or array of shape (n) of spiking rate as prob pre bin or [Hz], constant in time for each spike train 
-    n               : number of Poisson trains (N_pre)
+    n               : number of Poisson trains 
     myseed          : random seed. int or boolean
 
     Returns:
@@ -290,7 +304,10 @@ def Poisson_generator(dt, rate, n, num_steps, myseed=False, herz_rate = False):
         np.random.seed()
 
     # generate random variables uniformly distributed in [0,1]
-    u_rand = np.random.rand(num_steps, n)
+    if batch_size:
+        u_rand = np.random.rand(num_steps, batch_size, N_pre)
+    else:
+        u_rand = np.random.rand(num_steps, N_pre)
 
     # check if the rate is in Hz or in probability per bin
     if herz_rate:

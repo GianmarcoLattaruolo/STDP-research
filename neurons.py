@@ -284,6 +284,9 @@ class LIF_syn_conductance(LIFNeuron):
         decay = 1-dt/self.tau_m*(1+self.g_E+self.g_I)
         # constant drift
         drift = dt/self.tau_m*(self.U_resting + self.g_E*self.V_exc + self.g_I*self.V_inh)
+        # alternative way (just excitatory conductance)
+        #self.mem = self.mem + (-self.U_resting-self.mem + self.g_E * (self.V_exc -self.mem))*dt/self.tau_m
+
         # update
         self.mem = self.mem*decay + drift
         # store the membrane potential
@@ -403,7 +406,6 @@ class LIF_syn_conductance(LIFNeuron):
 
 
 
-
 class PoissonNeuron:
 
  
@@ -420,7 +422,7 @@ class PoissonNeuron:
         self.R = self.pars['R']
         self.U_resting = self.pars['U_resting']
         self.threshold = self.pars['threshold']
-        self.alpha = self.pars['alpha']
+        self.alpha = 0.1
         self.mem = self.pars['U_init']
 
         # user defined attributes

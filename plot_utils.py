@@ -380,7 +380,7 @@ def LIF_interactive_plot(pars_function, N_pre, num_steps,
             print('Returning the Random input')
             I = Poisson_generator(dt, rate, n = N_pre, num_steps = num_steps)
         
-        W_init = weight_initializer(pars, I, N_post)
+        W_init = weight_initializer(pars, N_post, I=I)
         neurons = simulation(pars, I, W_init = W_init,
                               neuron_type = LIFNeuron, N_post = N_post)
 
@@ -606,9 +606,9 @@ def STDP_interactive_plot(pars_function, I, N_post = 10,
                              tau_plus = tau_plus, tau_minus = tau_minus,
                              dynamic_threshold = dynamic_threshold,
                              hard_reset = hard_reset,
-                             refractory_time = False)
+                             )
         
-        W_init = weight_initializer(pars, I, N_post)
+        W_init = weight_initializer(pars, N_post, I=I, type_init = 3)
 
         neurons, syn = simulation(pars, I, neuron_type = neuron_type, weight_rule = STDP_synapse, N_post = N_post, W_init = W_init)
                 
@@ -710,7 +710,7 @@ def STDP_interactive_plot(pars_function, I, N_post = 10,
 
     
     A_plus_widget = widgets.FloatLogSlider(
-         value=0.08,
+         value=0.008*0.024,
          base=2,
          min=-10, # max exponent of base
          max=10, # min exponent of base
@@ -721,7 +721,7 @@ def STDP_interactive_plot(pars_function, I, N_post = 10,
          continuous_update=False
     )
     A_minus_widget = widgets.FloatLogSlider(
-         value=0.081,
+         value=0.0088*0.024,
          base=2,
          min=-10, # max exponent of base
          max=10, # min exponent of base
@@ -732,7 +732,7 @@ def STDP_interactive_plot(pars_function, I, N_post = 10,
          continuous_update=False
     )
     tau_m_widget = widgets.FloatSlider(
-         value=20,
+         value=10,
          min=0.1,
          max=1000,
          step=1,

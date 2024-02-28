@@ -35,7 +35,6 @@ class STDP_synapse:
         self.A_minus = self.pars['A_minus']
         self.tau_plus = self.pars['tau_plus']
         self.tau_minus = self.pars['tau_minus']
-        self.synaptic_decay = self.pars['synaptic_decay']
 
         # user defined attributes
         self.N_pre = N_pre
@@ -96,7 +95,7 @@ class STDP_synapse:
         # update the weights
         LTP = self.A_plus *  np.outer(post_spk_vector,pre_trace)
         LTD = self.A_minus *  np.outer(post_trace,pre_spk_vector)
-        self.W = self.W + LTP - LTD + self.synaptic_decay * self.pars['dt'] / self.pars['tau_syn'] * (self.w_min - self.W)
+        self.W = self.W + LTP - LTD 
 
         # weigths constrain
         if self.constrain == 'None':
