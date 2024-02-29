@@ -259,7 +259,6 @@ def simulation(
 
 
 
-
 ##########################################
 #                                        #
 #    FUNCTIONS FOR GENERATING INPUTS     #
@@ -322,7 +321,6 @@ def Poisson_generator(dt, rate, N_pre, num_steps, myseed=False, herz_rate = Fals
 
 
 
-
 def half_growing_rate(dt, num_steps, N_pre, rate_ratio = 0.5):
     """
     ARGS:
@@ -334,12 +332,10 @@ def half_growing_rate(dt, num_steps, N_pre, rate_ratio = 0.5):
     - I: input spike train with rate growing linearly for 0 to 1 in the presynaptic neurons for the first half of the simulation and from 1 to rate_ratio in the second half
     """
     rate = np.arange(0,N_pre,1)/N_pre
-    first_half = Poisson_generator(dt, rate = rate, n = N_pre, num_steps = num_steps//2)
-    second_half = Poisson_generator(dt, rate = rate * rate_ratio, n = N_pre, num_steps = num_steps//2)
+    first_half = Poisson_generator(dt, rate = rate, N_pre = N_pre, num_steps = num_steps//2)
+    second_half = Poisson_generator(dt, rate = rate * rate_ratio, N_pre = N_pre, num_steps = num_steps//2)
     I = np.concatenate([first_half, second_half ], axis=0) 
     return I
-
-
 
 
 
@@ -380,7 +376,7 @@ def random_shifted_trains(dt,
         N_pre_correlated = N_pre//2
     
     # generate the original spike train
-    original_train = Poisson_generator(dt, rate = rate, n = 1, num_steps = num_steps)
+    original_train = Poisson_generator(dt, rate = rate, N_pre = 1, num_steps = num_steps)
 
     # find the spike times of the original train
     spike_times = np.array(np.where(original_train==1))
@@ -396,11 +392,9 @@ def random_shifted_trains(dt,
         for time, index in zip(random_shifted_times, range(N_pre_correlated)):
             perturbed_spike_trains[time, index] = 1
 
-    pre_spk_train = Poisson_generator(dt, rate = rate, n = N_pre-N_pre_correlated, num_steps = num_steps)
+    pre_spk_train = Poisson_generator(dt, rate = rate, N_pre = N_pre-N_pre_correlated, num_steps = num_steps)
     pre_spk_train = np.concatenate(( perturbed_spike_trains, pre_spk_train), axis=1)
     return pre_spk_train, original_train
-
-
 
 
 
@@ -414,7 +408,7 @@ def random_offsets(dt, num_steps, N_pre, rate = 0.5, sections = 10, sort_shifts 
 
     # generate the random 
     original_length = int(num_steps*length_ratio)
-    I = Poisson_generator(dt, rate = rate, n = N_pre, num_steps = original_length)
+    I = Poisson_generator(dt, rate = rate, N_pre = N_pre, num_steps = original_length)
 
     # generate random offsets
     shift_values = np.random.randint(0,sections,N_pre)*(num_steps-original_length)//(sections-1)
@@ -434,8 +428,6 @@ def random_offsets(dt, num_steps, N_pre, rate = 0.5, sections = 10, sort_shifts 
 
 
 
-
-
 def signals_with_patterns(  
     dt, 
     N_pre ,
@@ -447,6 +439,7 @@ def signals_with_patterns(
     display_pattern = False,
     sort_neurons = True,
  ):
+    # this is the wrong way to do it
     """
     ARGS:
     pars : (dict) parameters for the simulation
@@ -459,6 +452,7 @@ def signals_with_patterns(
     length_pattern : (int) length of the pattern in time steps
 
     RETURNS:
+
     I_original : (np.array) original spike signals with shape (num_steps, N_pre)
     I_perturbed : (np.array) perturbed spike signals with shape (num_steps, N_pre) with the pattern inserted
     correlated_indexes : (np.array) indexes of the neurons presenting the pattern 
@@ -473,10 +467,10 @@ def signals_with_patterns(
         length_pattern = int(num_steps/(10*repeats))
 
     # generate a specific pattern
-    pattern = Poisson_generator(dt, rate = rate, n = 1, num_steps = length_pattern)
+    pattern = Poisson_generator(dt, rate = rate, N_pre = 1, num_steps = length_pattern)
 
     # generate the original injected spike signals with shape (num_steps, N_pre)
-    I_original = Poisson_generator(dt, rate = rate, n = N_pre, num_steps = num_steps)
+    I_original = Poisson_generator(dt, rate = rate, N_pre = N_pre, num_steps = num_steps)
 
     # start times for the specific pattern in the simulation of the neurons with shape (repeats, N_pre)
     start_times = np.random.randint(0,num_steps-length_pattern, (repeats,N_pre))

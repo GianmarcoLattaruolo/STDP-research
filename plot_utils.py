@@ -83,7 +83,7 @@ def raster_plot(
         label_x = 'Time steps'
 
     # useful values
-    N_pre = np.shape(pre_syn_spk)[1]
+    
     if np.ndim(post_syn_spk) == 1:
         N_post = 1
         post_syn_spk = np.expand_dims(post_syn_spk, axis=1)
@@ -91,8 +91,10 @@ def raster_plot(
         N_post = np.shape(post_syn_spk)[1]
 
     # Generate Plots
-    height_ratio = int(min(N_pre/ N_post,10))
+    
     if pre_syn_plot:
+        N_pre = np.shape(pre_syn_spk)[1]
+        height_ratio = int(min(N_pre/ N_post,10))
         fig, ax = plt.subplots(2, figsize=(15,10), sharex=True, gridspec_kw = {'height_ratios': [height_ratio,1]})
 
 
@@ -647,7 +649,7 @@ def STDP_interactive_plot(pars_function, I, N_post = 10,
             mask = np.isin(np.arange(N_pre), highlight)
             df1 = pd.DataFrame(y[:,mask])
             df1.plot(ax=ax[0], color = 'r', lw=1., alpha=alpha1, legend=False)
-            df2 = pd.DataFrame(y[:,~mask])
+            df2 = pd.DataFrame(y[:,~mask])  
             df2.plot(ax=ax[0], color = 'b', lw=1., alpha=alpha2, legend=False)
         else:
             ax[0].plot(x, y, lw=1.)

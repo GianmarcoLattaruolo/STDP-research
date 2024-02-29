@@ -405,7 +405,6 @@ class LIF_syn_conductance(LIFNeuron):
 
 
 
-
 class PoissonNeuron:
 
  
