@@ -53,18 +53,25 @@ def mnist_pars(**kwargs):  #DA SISTEMARE
     '''
 
     pars = {}
+    
     # simulation parameters
     pars['num_steps'] = 100
     pars['dt'] = 1.            # simulation time step [ms]  !do not change
+    pars['gain'] = 1.          # gain of the neuron
 
     # typical neuron parameters
-    pars['threshold'] = 1.0    # spiking threshold
+    pars['threshold'] = 1.0    
     pars['alpha'] = 0.9
     pars['beta'] = 0.8
-    pars['dynamic_threshold'] = False
     pars['reset_mechanism'] = 'subtract'
+    # parameters for dynamic threshold
+    pars['dynamic_threshold'] = False
+    pars['tau_theta'] = 1e7     
+    pars['theta_add'] = 0.05
+    # parameters for lateral inhibition
     pars['lateral_inhibition'] = False
     pars['lateral_inhibition_strength'] = 0.1
+    # parameters for refractory period
     pars['refractory_period'] = False
     pars['ref_time'] = 2.         
 
@@ -76,6 +83,9 @@ def mnist_pars(**kwargs):  #DA SISTEMARE
     pars['w_max'] = 1.0
     pars['A_minus'] = 0.00011
     pars['A_plus'] = 0.0001
+    pars['STDP_offset'] = 0.4
+    pars['mu_exponent'] = 2
+    pars['learning_rate'] = 0.0001
 
     # external parameters if any #
     for k in kwargs:
@@ -440,8 +450,6 @@ class STDP_synapse:
 
         plt.tight_layout()
         plt.show()
-
-
 
 
 

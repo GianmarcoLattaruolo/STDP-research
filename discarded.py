@@ -1091,6 +1091,25 @@ def mnist_pars(**kwargs):  #DA SISTEMARE
 
 
 
+from IPython.display import HTML
+# little animation to visualize an example of the spike data
+fig, ax = plt.subplots()
+
+# extract just one sample
+spike_data_sample = spike_data[:, 0, 0]
+print(spike_data_sample.size())
+
+# plot the animation
+anim = splt.animator(spike_data_sample, fig, ax)
+#%matplotlib widget
+#%matplotlib inline
+
+#HTML(anim.to_jshtml())
+#HTML(anim.to_html5_video())
+print(f"The corresponding target is: {targets_it[0]}")
+
+# If you're feeling sentimental, you can save the animation: .gif, .mp4 etc.
+anim.save("spike_mnist_test.mp4")
 
 
 
