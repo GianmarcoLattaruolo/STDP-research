@@ -1,4 +1,379 @@
 
+# import base libraries
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import sys
+import shutil
+
+cwd = os.getcwd()
+
+#torch
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+#snntorch
+import snntorch as snn
+from snntorch import utils
+from snntorch import spikegen
+from snntorch import spikeplot as splt
+from snntorch import surrogate
+from snntorch import backprop
+from snntorch import functional as SF
+
+
+def F(delta_t):
+    # auxiliary function for each pair of spikes
+    # I should improve this values
+    tau_minus = 20
+    tau_plus = 20
+    A_minus = 0.0088
+    A_plus = 0.008
+    if delta_t <= 0:  # delta_t = t_pre-t_post
+        return A_plus * np.exp(delta_t/tau_minus)
+    else:
+        return -A_minus * np.exp(-delta_t/tau_plus)
+
+class two_neurons():
+    """ 
+    I want to simple simulate a STDP rule between two LIF neurons for certain time steps. 
+    """
+    def __init__(self, initial_weight = 0.5, beta = [0.8, 0.8] ):
+        # we simply define the two beta values for the two neurons
+        self.first_neuron = snn.Leaky(beta = beta[0])
+        self.second_neuron = snn.Leaky(beta = beta[1])
+        # we introduce the list to record the membrane potentials and spikes
+        self.mem_rec1 = []
+        self.spk_rec1 = []
+        self.mem_rec2 = []
+        self.spk_rec2 = []
+        # intial values of membrane and spike
+        self.initial_spk = torch.zeros(1)
+        self.initial_mem = torch.zeros(1)
+        # introduce the initial synapse weight
+        self.synapse_weight = initial_weight    
+
+    # we define the simulation function
+    def forward(self, input):
+        # input: a generic list of input current
+        self.time_steps = len(input)
+        mem1 = self.initial_mem
+        mem2 = self.initial_mem
+        # run a forwar pass through the neurons for the entire input
+        for step in range(self.time_steps):
+
+            # we first run the first neuron
+            spk1, mem1 = self.first_neuron(input[step], mem1)
+
+            # we multiply the spike with the weight and feed it to the second neuron
+            synapse_pulse = spk1 * self.synapse_weight
+            spk2 , mem2 = self.second_neuron(synapse_pulse, mem2)
+
+            # append the values to the lists
+            self.mem_rec1.append(mem1)
+            self.spk_rec1.append(spk1)
+            self.mem_rec2.append(mem2)
+            self.spk_rec2.append(spk2)
+
+        return 
+
+    def visualize_forward(self, input):
+        # convert spikes lists to tensors
+        spk_rec1_t = torch.stack(self.spk_rec1).squeeze()
+        spk_rec2_t = torch.stack(self.spk_rec2).squeeze()
+
+        # visualize the forward pass in a simple plot
+        fig, ax = plt.subplots(5, figsize=( 6, 8),
+                                sharex=True,
+                                gridspec_kw = {'height_ratios': [0.4, 1, 0.4, 1, 0.4]})
+        
+        # Plot input current
+        ax[0].plot(input, c="tab:orange")
+        #ax[0].set_ylim([0, ylim_max1])
+        #ax[0].set_xlim([0, 200])
+        ax[0].set_ylabel("Input Current ($I_{in}$)")
+        ax[0].set_title("Simple forward pass of two neurons")
+
+        # Plot the membrane potential of the first neuron
+        ax[1].plot(self.mem_rec1)
+        #ax[1].set_ylim([0, 10])
+        ax[1].set_ylabel("Membrane Potential Of I neuron")
+        thr_line = self.first_neuron.threshold  #.detach().numpy()
+        ax[1].axhline(y=thr_line, alpha=0.25, linestyle="dashed", c="black", linewidth=2)
+    
+
+        # PLot the spike of the first neuron
+        splt.raster(spk_rec1_t, ax[2], s=self.time_steps, c="black", marker="|")
+        plt.ylabel("Spikes of I neuron")
+        plt.yticks([])
+
+        # Plot the membrane potential of the second neuron
+        ax[3].plot(self.mem_rec2)
+        #ax[3].set_ylim([0, 10])
+        ax[3].set_ylabel("Membrane Potential Of II neuron")
+        thr_line = self.second_neuron.threshold
+        ax[3].axhline(y=thr_line, alpha=0.25, linestyle="dashed", c="black", linewidth=2)
+        plt.xlabel("Time step")
+
+        # PLot the spike of the second neuron
+        splt.raster(spk_rec2_t, ax[4], s=self.time_steps, c="black", marker="|")
+        plt.ylabel("Spikes of II neuron")
+        plt.yticks([])
+
+    
+
+        return fig, ax
+    
+    def STDP_simulation(self, input, number_of_updates = 10):
+        # we want to simulate the STDP rule between the two neurons
+        # we implement a brute force method first
+
+        weights = []
+        for i in range(number_of_updates):
+            # append the new weights
+            weights.append(self.synapse_weight)
+
+            # first reset the membrane potentials and spikes
+            self.list_reset()
+            
+            # run a forward pass
+            self.forward(input)
+
+            # update the weight according to the time of the spikes
+            spk_train1 = self.spk_rec1
+            spk_train2 = self.spk_rec2
+            update = self.STDP_rule(spk_train1, spk_train2)
+            self.synapse_weight += update
+
+        # append the last weight 
+        weights.append(self.synapse_weight)
+
+        return weights
+    
+    def list_reset(self):
+        # we reset the lists
+        self.mem_rec1, self.spk_rec1, self.mem_rec2, self.spk_rec2 = [],[],[],[]
+        return
+
+    def STDP_rule(self, spk_pre, spk_post):
+        # we implement a simple STDP rule
+        weight_update = 0
+        for i in np.where(np.array(spk_pre).T[0]==1)[0]:
+            for j in np.where(np.array(spk_post).T[0]==1)[0]:
+                delta_t = i - j  # pre - post
+                weight_update += F(i-j)
+
+        return weight_update
+
+
+
+class N_to_1_neurons():
+    def __init__(self, initial_weights = 0.5, beta_values = [0.8, 0.8], neurons_in_first_layers = 10):
+        self.N = neurons_in_first_layers
+        self.fc1 = nn.Linear(self.N,1)
+        self.lif1 = snn.Leaky(beta = beta_values[0])
+        self.lif2 = snn.Leaky(beta = beta_values[1])
+
+        # initialize hidden states
+        self.mem1 = self.lif1.init_leaky()
+        self.mem2 = self.lif2.init_leaky()
+
+        # initialize synapse weights
+        self.synapse_weight = initial_weights*torch.ones(self.N)
+
+        # we introduce the list to record the membrane potentials and spikes
+        self.mem_rec1 = []
+        self.spk_rec1 = []
+        self.mem_rec2 = []
+        self.spk_rec2 = []
+
+    def forward(self, input):
+        self.time_steps = input.shape[0]
+        mem1 = self.mem1
+        mem2 = self.mem2
+        for step in range(self.time_steps):
+
+            # we first run the first neuron
+            spk1, mem1 = self.lif1(input[step], mem1)
+
+            # we multiply the spike with the weight and feed it to the second neuron
+            synapse_pulse = torch.dot(spk1 ,self.synapse_weight)
+            spk2 , mem2 = self.lif2(synapse_pulse, mem2)
+
+            # append the values to the lists
+            self.mem_rec1.append(mem1)
+            self.spk_rec1.append(spk1)
+            self.mem_rec2.append(mem2)
+            self.spk_rec2.append(spk2)
+
+    def visualize_forward(self, input):
+        fig, ax = plt.subplots(4, figsize=( 6, 8),
+                                sharex=True,
+                                gridspec_kw = {'height_ratios': [1, 1, 1, 0.3 ]})
+        
+        # Plot input current
+        ax[0].plot(input.detach().numpy())
+        #ax[0].set_ylim([0, ylim_max1])
+        #ax[0].set_xlim([0, 200])
+        ax[0].set_ylabel("Input Current ($I_{in}$)")
+
+        # Plot the first spikes train
+        spk_rec1_t = torch.stack(self.spk_rec1)
+        splt.raster(spk_rec1_t, ax[1], s=self.time_steps, c="black", marker="|")
+        plt.ylabel("Spikes from first layer")
+        plt.yticks([])
+
+        # Plot the membrane potential of the output neuron
+        ax[2].plot(torch.stack(self.mem_rec2).detach().numpy())
+        ax[2].set_ylabel("Membrane Potential Of II neuron")
+        thr_line = self.lif2.threshold
+        ax[2].axhline(y=thr_line, alpha=0.25, linestyle="dashed", c="black", linewidth=2)
+        plt.xlabel("Time step")
+
+        # PLot the spike of the output neuron
+        spk_rec2_t = torch.stack(self.spk_rec2)
+        splt.raster(spk_rec2_t, ax[3], s=self.time_steps, c="black", marker="|")
+        plt.ylabel("Spikes of II neuron")
+        plt.yticks([])
+
+        # show the figure
+        plt.show()
+
+        return fig, ax
+
+    def STDP_simulation(self, input, number_of_updates = 10):
+        # list to store all the subsequent weights updates
+        weights = []
+        for i in range(number_of_updates):
+            # append the new weights
+            weights.append(self.synapse_weight)
+
+            # first reset the membrane potentials and spikes
+            self.list_reset()
+            
+            # run a forward pass
+            self.forward(input)
+
+            # update the weight according to the time of the spikes
+            spk_train1 = self.spk_rec1
+            spk_train2 = self.spk_rec2
+            update = self.STDP_rule(spk_train1, spk_train2)
+            self.synapse_weight = weights[i] + update
+
+        # append the last weight series
+        weights.append(self.synapse_weight)
+
+
+        return weights
+
+    def list_reset(self):
+        # we reset the lists
+        self.mem_rec1, self.spk_rec1, self.mem_rec2, self.spk_rec2 = [],[],[],[]
+        return
+
+    def STDP_rule(self, spk_pre, spk_post):
+        # we implement a simple STDP rule
+        weight_update = torch.zeros(self.N)
+        # convert the spike trains into tensor
+        spk_pre = torch.stack(spk_pre)   # spk_pre is a tensor of shape (time_steps, N_neurons)
+        spk_post = torch.stack(spk_post)
+
+        # iterate over the spike times of the output neuron
+        for j in np.where(spk_post.detach().numpy()==1)[0]:
+            # iterate over the neuron in the first layer
+            for n_neuron in range(self.N):
+                # consider the spikes of the n_neuron
+                spk_pre_n = spk_pre[:,n_neuron]
+                # iterate over the spike times of the n_neuron
+                for i in np.where(spk_pre_n.detach().numpy()==1)[0]:
+                    delta_t = i - j  # pre - post
+                    weight_update[n_neuron] += F(i-j)
+
+        return weight_update
+
+
+
+
+
+
+def test_two_neuron(input):
+    #input = torch.zeros(40)
+    #input[10:20] = 0.5
+    #input[30:40] = 0.5
+    #input = np.cos(np.linspace(0, 2*np.pi, 40))
+    #input = spikegen.rate_conv(torch.rand((200, 784)))
+
+
+    # we define the two neuron
+    small_snn = two_neurons(initial_weight = 0.5, beta = [0.8, 0.8] )
+    small_snn.forward(input)
+    fig1, ax1 = small_snn.visualize_forward(input)
+    # show the figure
+    plt.show()
+    weights = small_snn.STDP_simulation(input, number_of_updates = 10)
+    small_snn.list_reset()
+    small_snn.forward(input)
+    fig2, ax2 = small_snn.visualize_forward(input)
+    # show the new figure
+    plt.show()
+
+
+
+def test_N_to_1():
+# first define the input current
+    time_steps = 40 # twice the pattern
+    N_neurons = 10
+    n_updates = 100
+    # half of the neurons have a random input
+    input_random = np.random.randn(time_steps, N_neurons//2)/2
+    # half of the neurons have a input with a pattern
+    pattern = np.array([[1,2,4,8,16,32,64,128,0,128,0,0,0,0,0,0,0,0,0,0]])/15
+    pattern = np.array([pattern, pattern]).reshape(1,-1)/5
+    pattern = np.repeat(pattern, repeats=N_neurons//2, axis=0).T
+    pattern = pattern + np.random.randn(time_steps, N_neurons//2)/10
+    # concatenate the input
+    input = np.concatenate([input_random, pattern], axis=1)
+    input = torch.from_numpy(input).float()
+    
+    # create the simple snn N to 1
+    my_snn = N_to_1_neurons(neurons_in_first_layers = N_neurons)
+    # run a forward pass
+    my_snn.forward(input)
+    # visualize the results
+    #_,_ = my_snn.visualize_forward(input)
+
+    # run the STDP simulation
+    weights = my_snn.STDP_simulation(input, number_of_updates = n_updates)
+    # reset the list
+    my_snn.list_reset()
+    # run a forward pass
+    my_snn.forward(input)
+    # visualize the results
+    #_,_ = my_snn.visualize_forward(input)
+
+
+    # visualize the history of weights
+    history_weights = torch.stack(weights).detach().numpy()
+    plt.plot(history_weights)
+    # show a little number for each line  on the graph
+    for i in range(history_weights.shape[1]):
+        plt.text(n_updates, history_weights[n_updates,i], str(i))
+    plt.show()
+
+    return my_snn, history_weights
+
+
+
+# now I should optimize the STDP rule to scale my experiments
+
+
+if __name__ =='__main__':
+
+    my_snn, history_weights = test_N_to_1()
+
+    print()
+
 def base_simulation(
         pars,
         spk_input, # input spike train, a numpy vector of shape (time_steps, N_pre)
@@ -475,4 +850,268 @@ def syn_plot(pars, syn,
     #output.layout.height = '400px'    
     return interactive_plot
  
+
+
+
+
+
+
+
+####################################
+#                                  #
+#       SNNTorch Discarded         #
+#                                  #
+####################################
+
+
+
+
+
+
+
+
+
+
+# basic variables
+N_pre = 100
+N_pre_correlated = 10
+N_post = 10
+num_steps = 100
+batch_size = 0 # for the moment we do not use batch size
+rate = 0.1
+# set torch seed
+torch.manual_seed(42)
+
+class syn_stdp_inh_hidden(nn.Module):
+
+    def __init__(self, pars, N_pre, N_post = 1):
+        super(syn_stdp_inh_hidden, self).__init__()
+
+        # model parameters
+        self.pars = pars
+        self.alpha = pars.get('alpha', 0.9)
+        self.beta = pars.get('beta', 0.8)
+        self.w_max = pars.get('w_max', 1.0)
+        self.w_min = pars.get('w_min', 0.0)
+
+        # SNN structure
+        self.fc = nn.Linear(N_pre, N_post, bias=False)
+        # clamp the weight to positive values
+        self.fc.weight.data = torch.clamp(self.fc.weight.data, min=self.w_min, max=self.w_max)
+        # set the weight of the layer
+        #W_init = weight_initializer(pars, N_pre, N_post, type_init = 3, tensor = True)
+        #self.fc.weight = nn.Parameter(W_init)
+        reset_mechanism = pars['reset_mechanism']
+        self.lif = snn.Synaptic(alpha = self.alpha, 
+                                beta = self.beta, 
+                                threshold = pars['threshold'], 
+                                reset_mechanism = reset_mechanism,
+                                init_hidden = True
+                                ) # inhibition is a feature that does not work properly yet
+        self.lif2 = snn.Synaptic(alpha = self.alpha,
+                                beta = self.beta,
+                                threshold = pars['threshold'],
+                                reset_mechanism = reset_mechanism,
+                                init_hidden = False
+                                )
+
+    def forward(self, x, manual_inhibition = False):
+        # initiliaze the membrane potential and the spike
+        cond2, mem2 = self.lif2.init_synaptic()
+
+        #tracking variables
+        mem_rec = []
+        spk_rec = []
+        syn_rec = []
+        mem2_rec = []
+        # dovrei inizializzare tutto o come liste o come tensori...
+        pre_syn_traces = generate_traces(self.pars, x)
+        post_syn_traces = torch.zeros((x.shape[0]+1, N_post))
+        weight_history = torch.zeros((x.shape[0]+1, N_post, N_pre))
+        weight_history[0,:,:] = self.fc.weight.data
+
+        for step in range(x.shape[0]):
+            # run the fc layer
+            cur_step = self.fc(x[step])
+            # run thw lif neuron
+            spk = self.lif(cur_step)
+            spk, cond2, mem2 = self.lif2(spk, cond2, mem2) 
+            # find the first neuron that spikes
+            if spk.sum() > 0 and manual_inhibition:
+                self.lif.syn = self.lateral_inhibition(spk, self.lif.syn)
+
+
+            # store the membrane potential and the spike
+            mem_rec.append(self.lif.mem)
+            spk_rec.append(spk)
+            syn_rec.append(self.lif.syn)
+            mem2_rec.append(mem2)
+            # updatae post synaptic traces
+            beta_minus = self.pars.get('beta_minus',0.9)
+            post_syn_traces[step+1, :] = beta_minus*post_syn_traces[step, :] + spk
+
+            # update the weights
+            weight_history[step,:,:] = self.fc.weight.data
+            A_plus, A_minus = self.pars['A_plus'], self.pars['A_minus']
+            LTP = A_plus * torch.outer(spk, pre_syn_traces[step,:]) 
+            LTD = A_minus * torch.outer(post_syn_traces[step+1,:], x[step])
+            self.fc.weight.data = self.fc.weight.data + LTP - LTD
+            # hard constrain on the weights
+            self.fc.weight.data = torch.clamp(self.fc.weight.data, min=self.w_min, max=self.w_max)
+
+
+        post_syn_traces = post_syn_traces[:-1,:]
+        weight_history = weight_history[:-1,:,:]
+
+        self.records = {'mem': torch.stack(mem_rec), 
+                        'spk': torch.stack(spk_rec), 
+                        'syn':  torch.stack(syn_rec), 
+                        'pre_trace': pre_syn_traces, 
+                        'post_trace': post_syn_traces, 
+                        'W': weight_history,
+                        'mem2': torch.stack(mem2_rec)}
+
+        return 
+    
+    def lateral_inhibition(self, spk, syn):
+        first_neuron_index = torch.where(spk)[0][0]
+        # inhibit the conductance of all the others
+        temp = torch.ones_like(syn)
+        temp[first_neuron_index] = 0
+        syn = syn  - temp * 0.01 # reduce the conductance of all the neuron but the first to spike
+
+        return syn
+
+    
+
+
+
+# parameters of the simulation
+pars = default_pars(type_parameters='simple', 
+                    w_init_value = 0.012,
+                    alpha = 0.9,
+                    beta = 0.8,
+                    threshold = 1.0,
+                    reset_mechanism = 'zero',
+                    A_minus = 0.0088 * 0.024,
+                    A_plus = 0.008 * 0.024,
+                    beta_minus = 0.9,
+                    beta_plus = 0.9)
+dt = pars['dt']
+
+# generate the input spikes
+cur_in_numpy,_ = random_shifted_trains(dt, num_steps, N_pre, N_pre_correlated , rate = rate, shift_values=[-5,5]) 
+#cur_in_numpy, _ , first_section_index = random_offsets(dt, num_steps, N_pre, rate = rate, sections = N_post, sort_shifts = True, length_ratio = 0.5)
+cur_in = torch.from_numpy(cur_in_numpy)
+cur_in = cur_in.to(dtype = torch.float32, device = device)
+
+# intitilize the model
+my_model = syn_stdp_inh_hidden(pars, N_pre, N_post)
+
+# run the simulation
+#my_model.train()
+start_time = time.time()
+my_model.forward(cur_in, manual_inhibition = False)
+print(f"Forward pass time : --- {(time.time() - start_time):.2f} seconds ---")
+mem_rec, spk_rec, syn_rec = my_model.records['mem'], my_model.records['spk'], my_model.records['syn'],
+pre_trace, post_trace, weight_history =  my_model.records['pre_trace'], my_model.records['post_trace'], my_model.records['W']
+
+plot_results_33(dt, num_steps, cur_in, pre_trace, syn_rec, N_pre, mem_rec, spk_rec, post_trace, weight_history, N_post, N_pre_correlated)
+
+
+
+def mnist_pars(**kwargs):  #DA SISTEMARE
+    
+
+    '''
+    Define a dictionary with the default parameters for the nuerons, the weight update rule and the simulation overall
+    ARGS:
+    - kwargs: dictionary with the parameters to be updated or added
+    RETURNS:
+    - pars (dictionary): dictionary with the parameters
+    '''
+
+    pars = {}
+    # time steps
+    pars['dt'] = 1.            # simulation time step [ms]  !do not change
+
+    # typical neuron parameters
+    pars['tau_m'] = 10.                      # membrane time constant [ms]
+    pars['v_rest_e'] = -65.     # resting potential for excitatory neurons [mV]
+    pars['v_rest_i'] = -60.     # resting potential for inhibitory neurons [mV]
+    pars['v_reset_e'] = -65.   # reset potential for excitatory neurons [mV]
+    pars['v_reset_i'] = -45.   # reset potential for inhibitory neurons [mV]
+    pars['v_thresh_e'] = -52.  # threshold potential for excitatory neurons [mV]
+    pars['v_thresh_i'] = -40.  # threshold potential for inhibitory neurons [mV]
+    pars['refrac_e'] = 5.      # refractory time for excitatory neurons [ms]
+    pars['refrac_i'] = 2.      # refractory time for inhibitory neurons [ms]
+
+
+    # neuron parameters for conductance based model
+    pars['tau_syn_exc'] = 10.   # synaptic time constant [ms]
+    pars['tau_syn_inh'] = 10.     # synaptic time constant [ms]
+    pars['U_rev_exc'] = 1.      # excitatory reversal potential [mV]
+    pars['U_rev_inh'] = -1.   # inhibitory reversal potential [mV]
+    pars['max_g'] = 1.     # maximum synaptic conductance [nS]
+
+    # in the case of dynamic threshold
+    pars['tau_theta'] = 1e7    # time constant for threshold added dynamic decay [ms]
+    pars['theta_add'] = 0.05   # maximal increase in threshold voltage per spike [mV]                      
+
+    # STDP parameters
+    pars['STDP_offset'] = 0.4               # for the STDP type 1
+    pars['A_plus'] =  0.008 * pars['max_g']    # magnitude of LTP
+    pars['A_minus'] = 0.0088 * pars['max_g']  # magnitude of LTD 
+    pars['nu'] = 0.0001
+    pars['tau_plus'] = 20                    # LTP time constant [ms]
+    pars['tau_minus'] = pars['tau_plus']     # LTD time constant [ms]
+    pars['tau_syn'] = 5.                     # synaptic time constant [ms] if synaptic decay is used
+    pars['dynamic_weight_exponent'] = 0.01   # exponent for the dynamic weight constraint
+
+    # weight parameters
+    pars['w_max'] = 1.       # maximum weight
+    pars['w_min'] = 0.                       # minimum weight
+    pars['w_init_value'] = 0.5  # initial value for the weights
+
+    # neuron initialization parameters
+    pars['refractory_time'] = False 
+    pars['dynamic_threshold'] = False
+    pars['hard_reset'] = True
+
+    # weights update rule parameters
+    pars['constrain'] = 'Hard'               # weight constrain
+    pars['short_memory_trace'] = False       # short memory trace for the traces
+
+    # dataset parameters
+    pars['num_examples'] = 10000
+    pars['N_pre'] = 784
+    pars['N_post'] = 400  # in the original paper they had 400 excitatory neurons and 400 inhibitory neurons
+    pars['num_steps_single'] = 350
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
