@@ -1120,7 +1120,141 @@ anim.save("spike_mnist_test.mp4")
 
 
 
+# basic variables
+N_pre = 100
+N_pre_correlated = 10
+N_post = 10
+num_steps = 100
+batch_size = 0 # for the moment we do not use batch size
+rate = 0.05
+# set torch seed
+torch.manual_seed(42)
 
+class syn_stdp_inh(nn.Module):
+
+    def __init__(self, pars, N_pre, N_post = 1):
+        super(syn_stdp_inh, self).__init__()
+
+        # model parameters
+        self.pars = pars
+        self.alpha = pars.get('alpha', 0.9)
+        self.beta = pars.get('beta', 0.8)
+        self.w_max = pars.get('w_max', 1.0)
+        self.w_min = pars.get('w_min', 0.0)
+
+        # SNN structure
+        self.fc = nn.Linear(N_pre, N_post, bias=False)
+        # clamp the weight to positive values
+        self.fc.weight.data = torch.clamp(self.fc.weight.data, min=self.w_min, max=self.w_max)
+        # set the weight of the layer
+        #W_init = weight_initializer(pars, N_pre, N_post, type_init = 3, tensor = True)
+        #self.fc.weight = nn.Parameter(W_init)
+        reset_mechanism = 'zero' if pars['hard_reset'] else 'subtract'
+        self.lif = snn.Synaptic(alpha = self.alpha, 
+                                beta = self.beta, 
+                                threshold = pars['threshold'], 
+                                reset_mechanism = reset_mechanism,
+                                ) # inhibition is a feature that does not work properly yet
+
+    def forward(self, x, manual_inhibition = False):
+        # initiliaze the membrane potential and the spike
+        cond, mem = self.lif.init_synaptic()
+
+        #tracking variables
+        mem_rec = []
+        spk_rec = []
+        cond_rec = []
+        # dovrei inizializzare tutto o come liste o come tensori...
+        pre_syn_traces = generate_traces(self.pars, x)
+        post_syn_traces = torch.zeros((x.shape[0]+1, N_post))
+        weight_history = torch.zeros((x.shape[0]+1, N_post, N_pre))
+        weight_history[0,:,:] = self.fc.weight.data
+
+        for step in range(x.shape[0]):
+            # run the fc layer
+            cur_step = self.fc(x[step])
+            # run thw lif neuron
+            spk, cond,  mem = self.lif(cur_step, cond, mem)
+
+            # find the first neuron that spikes
+            if spk.sum() > 0 and manual_inhibition:
+                cond = self.latera_inhibition(spk, cond)
+
+
+            # store the membrane potential and the spike
+            mem_rec.append(mem)
+            spk_rec.append(spk)
+            cond_rec.append(cond)
+
+            # updatae post synaptic traces
+            beta_minus = self.pars.get('beta_minus',0.9)
+            post_syn_traces[step+1, :] = beta_minus*post_syn_traces[step, :] + spk
+
+            # update the weights
+            weight_history[step,:,:] = self.fc.weight.data
+            A_plus, A_minus = self.pars['A_plus'], self.pars['A_minus']
+            LTP = A_plus * torch.outer(spk, pre_syn_traces[step,:]) 
+            LTD = A_minus * torch.outer(post_syn_traces[step+1,:], x[step])
+            self.fc.weight.data = self.fc.weight.data + LTP - LTD
+            # hard constrain on the weights
+            self.fc.weight.data = torch.clamp(self.fc.weight.data, min=self.w_min, max=self.w_max)
+
+
+        post_syn_traces = post_syn_traces[:-1,:]
+        weight_history = weight_history[:-1,:,:]
+
+        self.records = {'mem': torch.stack(mem_rec), 
+                        'spk': torch.stack(spk_rec), 
+                        'cond':  torch.stack(cond_rec), 
+                        'pre_trace': pre_syn_traces, 
+                        'post_trace': post_syn_traces, 
+                        'W': weight_history}
+
+        return 
+    
+    def latera_inhibition(self, spk, cond):
+        first_neuron_index = torch.where(spk)[0][0]
+        # inhibit the conductance of all the others
+        temp = torch.ones_like(cond)
+        temp[first_neuron_index] = 0
+        cond = cond  - temp * 0.1 # reduce the conductance of all the neuron but the first to spike
+
+        return cond
+
+    
+
+
+
+# parameters of the simulation
+pars = default_pars(type_parameters='simple', 
+                    w_init_value = 0.012,
+                    alpha = 0.9,
+                    beta = 0.8,
+                    threshold = 1.0,
+                    hard_reset = True,
+                    A_minus = 0.0088 * 0.024,
+                    A_plus = 0.008 * 0.024,
+                    beta_minus = 0.9,
+                    beta_plus = 0.9)
+dt = pars['dt']
+
+# generate the input spikes
+cur_in_numpy,_ = random_shifted_trains(dt, num_steps, N_pre, N_pre_correlated , rate = rate, shift_values=[-5,5]) 
+#cur_in_numpy, _ , first_section_index = random_offsets(dt, num_steps, N_pre, rate = rate, sections = N_post, sort_shifts = True, length_ratio = 0.5)
+cur_in = torch.from_numpy(cur_in_numpy)
+cur_in = cur_in.to(dtype = torch.float32, device = device)
+
+# intitilize the model
+my_model = syn_stdp_inh(pars, N_pre, N_post)
+
+# run the simulation
+#my_model.train()
+start_time = time.time()
+my_model.forward(cur_in, manual_inhibition = True)
+print(f"Forward pass time : --- {(time.time() - start_time):.2f} seconds ---")
+mem_rec, spk_rec, cond_rec, pre_trace, post_trace, weight_history = my_model.records['mem'], my_model.records['spk'], my_model.records['cond'], my_model.records['pre_trace'], my_model.records['post_trace'], my_model.records['W']
+
+# plot results
 
 
 
