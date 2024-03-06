@@ -55,13 +55,13 @@ def mnist_pars(**kwargs):  #DA SISTEMARE
     pars = {}
     
     # simulation parameters
-    pars['num_steps'] = 100
     pars['dt'] = 1.            # simulation time step [ms]  !do not change
     pars['gain'] = 1.          # gain of the neuron
     pars['test_num_steps'] = 50
     pars['use_min_spk_number'] = False
     pars['min_spk_number'] = 5
     pars['store_records'] = True
+    pars['store_subsampling_factor'] = 10
 
     # typical neuron parameters
     pars['threshold'] = 1.0    

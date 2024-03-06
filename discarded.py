@@ -1621,5 +1621,58 @@ plot_results_31(pars['dt'], cur_in, pre_trace, mem_rec, spk_rec, post_trace, wei
 
 
 
+# Training Parameters
+data_path=r'C:\Users\latta\GitHub\STDP-research\data'
+num_classes = 10  # MNIST has 10 output classes
 
+# Torch Variables
+dtype = torch.float
+
+# define the transformation
+transform = transforms.Compose([
+            transforms.Resize((784,1)),
+            transforms.Grayscale(),
+            transforms.ToTensor(),
+            transforms.Normalize((0,), (1,)),
+            transforms.Lambda(lambda x: torch.squeeze(x)),
+])
+# download the MNIST dataset
+train_dataset = datasets.MNIST(data_path, train=True, download=True, transform=transform)
+test_dataset = datasets.MNIST(data_path, train=False, download=True, transform=transform)
+
+# Split the train dataset into train and validation sets
+train_size = 50000
+val_size = 10000
+test_size = 10000
+
+indices = torch.randperm(len(train_dataset)).tolist()
+train_indices = indices[:train_size]
+val_indices = indices[train_size:train_size+val_size]
+
+# Create data loaders for train, validation, and test sets
+batch_size = 3
+train_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size = batch_size, sampler=torch.utils.data.SubsetRandomSampler(train_indices))
+val_loader = torch.utils.data.DataLoader(dataset=train_dataset, batch_size = batch_size, sampler=torch.utils.data.SubsetRandomSampler(val_indices))
+test_loader = torch.utils.data.DataLoader(dataset=test_dataset, batch_size = batch_size, shuffle=False)
+
+# Checking the sizes of datasets
+print(f"Train set size: {len(train_loader.dataset)}")
+print(f"Validation set size: {len(val_loader.dataset)}")
+print(f"Test set size: {len(test_loader.dataset)}")
+
+# extract a subset for preliminary experiments
+subset = 100 # ratio of the original dataset
+mnist_subset = utils.data_subset(train_dataset, subset)
+print(f"The size of mnist_subset is {len(mnist_subset)}")
+subset_loader = DataLoader(mnist_subset, batch_size=batch_size, shuffle=True)
+
+# Iterate through minibatches
+data = iter(subset_loader)
+data_it, targets_it = next(data)
+
+# Spiking Data
+num_steps = 100
+spike_data = spikegen.rate(data_it, num_steps=num_steps, gain = 1)
+
+print(f'Size of a batch of spike data is {spike_data.size()}')
 

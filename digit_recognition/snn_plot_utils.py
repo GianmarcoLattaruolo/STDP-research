@@ -258,7 +258,8 @@ def plot_results_32(dt,
                     N_pre, 
                     N_pre_correlated, 
                     N_post, 
-                    num_steps):
+                    num_steps,
+                    threshold_rec = None):
     # plot the input spikes, membrane potentials, output spikes, pre and post synaptic traces and the weights evolution
     fig, ax = plt.subplots(8, figsize=(12,30), gridspec_kw = {'height_ratios': [1, 1, 1, 1, 0.4, 1, 1, 1]})
     time_steps = np.arange(num_steps) * dt
@@ -272,21 +273,24 @@ def plot_results_32(dt,
     ax[0].set_title("Input Spikes")
 
     # pre synaptic traces
-    ax[1].plot(time_steps, pre_trace.detach().numpy(), alpha = 0.8, lw = lw)
+    ax[1].plot(time_steps, pre_trace, alpha = 0.8, lw = lw)
     ax[1].set_ylabel("Pre-synaptic trace")
     ax[1].set_title("Pre-synaptic trace")
 
     # neuron conductance
     if type(cond_rec) == torch.Tensor:
-        ax[2].plot(time_steps, cond_rec.detach().numpy(), alpha = 0.8, lw = lw)
+        ax[2].plot(time_steps, cond_rec, alpha = 0.8, lw = lw)
     else:
         ax[2].plot(time_steps, cond_rec, alpha = 0.8, lw = lw)
     ax[2].set_ylabel("Neuron conductance")
     ax[2].set_title("Neuron conductance")
 
     # membrane potential
-    ax[3].plot(time_steps + 1, mem_rec.detach().numpy(), alpha = 0.8, lw = lw)
-    ax[3].hlines(1, 1, num_steps + 1, color = 'red', linestyle = '--')
+    ax[3].plot(time_steps + 1, mem_rec, alpha = 0.8, lw = lw)
+    if threshold_rec is not None:
+        ax[3].plot(threshold_rec[:,0], color = 'red', linestyle = '--')
+    else:
+        ax[3].hlines(1, 1, num_steps + 1, color = 'red', linestyle = '--')
     ax[3].set_ylabel("Membrane Potential")
     ax[3].set_title("Membrane Potential and Output Spikes")
 
@@ -294,17 +298,18 @@ def plot_results_32(dt,
     height = ax[4].bbox.height
     ax[4].scatter(*torch.where(spk_rec), s=2*height/N_post, c="black", marker="|", lw = lw)
     ax[4].set_ylim([0-0.5, N_post-0.5])
+    spk_rec = spk_rec.float()
     ax[4].set_title(f"Mean output firing rate: {spk_rec.mean():.2f} ")
     ax[4].set_ylabel("Neuron index")
     ax[4].set_xlabel("Time step")
 
     # post synaptic traces
-    ax[5].plot(time_steps + 1, post_trace.detach().numpy(), alpha = 0.8, lw = lw)
+    ax[5].plot(time_steps + 1, post_trace, alpha = 0.8, lw = lw)
     ax[5].set_ylabel("Post-synaptic trace")
     ax[5].set_xlabel("Time step")
 
     # plot of the weights evolution
-    W = weight_history.detach().numpy()[:,0,:]
+    W = weight_history[:,0,:]
     cor_weights = pd.DataFrame(W[:, :N_pre_correlated])
     uncor_weights = pd.DataFrame(W[:, N_pre_correlated:])
     cor_weights.plot(ax = ax[6], legend = False, color = 'tab:red', alpha = 0.8, lw = lw)
