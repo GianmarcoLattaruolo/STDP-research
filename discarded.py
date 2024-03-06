@@ -1259,8 +1259,363 @@ mem_rec, spk_rec, cond_rec, pre_trace, post_trace, weight_history = my_model.rec
 
 
 
+#####################################################
+#                                                   #
+#  FROM THE ORIGINAL NOTEBOOK OF DIGIT RECOGNITION  #
+#                                                   #
+#####################################################
 
 
+# 1. SNNTorch neurons
+## 1.1 Leaky Integrate-and-Fire neuron
+# basic variables
+N_pre = 10
+N_post = 1
+num_steps = 100
+
+#generate input spikes
+cur_in = repeat_ones(num_steps, N_pre, silent_time = 7 )
+#cur_in = np.ones((num_steps, N_pre))
+# convert in torch tensor
+cur_in = torch.from_numpy(cur_in)
+
+
+# parameters of the simulation
+pars = default_pars(type_parameters='simple', 
+                    w_init_value = 0.11)
+beta = np.exp(-pars['dt']/pars['tau_m'])
+# initialize the weights
+W = weight_initializer(pars, N_post, I = cur_in, type_init=3)
+# convert in torch tensor
+W = torch.from_numpy(W)
+
+# initialize the neuron
+reset_mechanism = 'zero' if pars['hard_reset'] else 'subtract' 
+lif1 = snn.Leaky(beta=beta, threshold = pars['threshold'], 
+                 learn_beta=False, 
+                 learn_threshold=False, 
+                 reset_mechanism=reset_mechanism,
+                 #reset_delay = False
+                 )
+lif_fmp = snn.Leaky(beta=beta, threshold = 10000)
+
+# run a simple simulation
+mem = torch.zeros(1)
+spk = torch.zeros(1)
+mem_fmp = torch.zeros(1)
+spk_fmp = torch.zeros(1)
+mem_rec = []
+spk_rec = []
+mem_fmp_rec = []
+spk_fmp_rec = []
+
+# neuron simulation
+for step in range(num_steps):
+    step_cur_in = W @ cur_in[step]
+    spk, mem = lif1.forward(step_cur_in, mem)
+    _,mem_fmp = lif_fmp(step_cur_in, mem_fmp)
+    mem_rec.append(mem)
+    spk_rec.append(spk)
+    mem_fmp_rec.append(mem_fmp)
+
+
+# convert lists to tensors
+mem_rec = torch.stack(mem_rec)
+spk_rec = torch.stack(spk_rec)
+mem_fmp_rec = torch.stack(mem_fmp_rec)
+
+
+    
+plot_cur_mem_spk(cur_in, (W @ cur_in.T)[0], mem_rec, mem_fmp_rec, spk_rec, thr_line=1, title="snn.Leaky Neuron Model")
+
+
+## 1.2 Synaptic Conductance-based LIF 
+#basic variables
+N_pre = 10
+N_post = 1
+num_steps = 100
+
+# parameters of the simulation
+pars = default_pars(type_parameters='simple', 
+                    w_init_value = 0.02)
+
+# initialize the weights
+W = weight_initializer(pars, N_post, I = cur_in, type_init=3)
+W = torch.from_numpy(W)
+
+#generate input spikes
+rate=0.3
+#cur_in = Poisson_generator(pars['dt'],rate, N_pre,num_steps)
+#cur_in = np.ones((num_steps, N_pre))
+cur_in = repeat_ones(num_steps, N_pre, silent_time = 8 )
+cur_in = torch.from_numpy(cur_in)
+
+# Temporal dynamics to compute on the basis of params
+alpha = np.exp(-pars['dt']/pars['tau_syn_exc'])  # on SNN Torch tutorial this was 0.9 and I found 0.904
+beta = np.exp(-pars['dt']/pars['tau_m'] * (1+pars['max_g']))  # on SNN Torch tutorial this was 0.8 and I found 0.8187
+
+# Initialize 2nd-order LIF neuron
+reset_mechanism = 'zero' if pars['hard_reset'] else 'subtract'
+lif2 = snn.Synaptic(alpha=alpha, beta=beta,threshold = pars['threshold'],
+                    learn_alpha=False, 
+                    learn_beta=False, 
+                    learn_threshold=False, 
+                    reset_mechanism=reset_mechanism)
+lif2_fmp = snn.Synaptic(alpha=alpha, beta=beta, threshold=100000 ) # second neuron with no threshold to visualize the FMP
+
+
+# Initialize hidden states and output
+syn, mem = lif1.init_synaptic() # random initialization of synapse and membrane
+syn_fmp, mem_fmp = lif_fmp.init_synaptic() # random initialization of synapse and membrane
+syn_rec = []
+mem_rec = []
+spk_rec = []
+mem_fmp_rec = []
+syn_fmp_rec = []
+
+# Simulate neurons
+for step in range(num_steps):
+    step_cur_in = W @ cur_in[step]
+    spk_out, syn, mem = lif2(step_cur_in, syn, mem)
+    _, syn_fmp, mem_fmp = lif2_fmp(step_cur_in, syn_fmp, mem_fmp)
+    spk_rec.append(spk_out)
+    syn_rec.append(syn)
+    mem_rec.append(mem)
+    mem_fmp_rec.append(mem_fmp)
+
+
+# convert lists to tensors
+spk_rec = torch.stack(spk_rec)
+syn_rec = torch.stack(syn_rec)
+mem_rec = torch.stack(mem_rec)
+mem_fmp_rec = torch.stack(mem_fmp_rec)
+
+
+
+plot_spk_cur_mem_spk((W @ cur_in.T)[0], syn_rec, mem_rec, mem_fmp_rec, spk_rec, title="snn.Synaptic Neuron Model")
+# 2. STDP preliminaries experiments
+## 2.1 LIF
+# basic variables
+N_pre = 50
+N_post = 10
+num_steps = 100
+
+# parameters of the simulation
+pars = default_pars(type_parameters='simple', 
+                    w_init_value = 0.1)
+time_steps = np.arange(num_steps) * pars['dt']
+rate = 0.05
+
+#generate input spikes
+#cur_in = repeat_ones(num_steps, N_pre, silent_time = 8 )
+cur_in = Poisson_generator(pars['dt'], rate, N_pre, num_steps)
+cur_in = torch.from_numpy(cur_in)
+
+# initialize the weights
+W = weight_initializer(pars, N_post, I = cur_in, type_init=3) * np.random.rand(N_post,N_pre) # noise added to appreciate different STDP dynamics
+W = torch.from_numpy(W)
+
+# initialize postsynaptic neurons
+beta = np.exp(-pars['dt']/pars['tau_m'])
+rm = 'zero' if pars['hard_reset'] else 'subtract' 
+thr = pars['threshold']
+post_neurons = [ snn.Leaky(beta = beta, threshold=thr, reset_mechanism=rm) for _ in range(N_post)]
+
+# initialize the tracking variables
+mem_record = np.zeros((num_steps+1, N_post))
+spk_record = np.zeros((num_steps+1, N_post))
+mem_record[0,:] = np.asarray([0 for i in range(N_post)])
+spk_record[0,:] = np.asarray([0 for i in range(N_post)])
+
+# intialize the synapses
+my_synapses = STDP_synapse(pars, N_pre, N_post, W_init = W ) # this works even if now W is a tensor!
+
+# run the simulation
+for step in range(num_steps):
+    # current injected at this time step
+    pre_syn_spikes = cur_in[step]
+    cur_in_step = W @ pre_syn_spikes
+
+    #spike generated by the layer
+    for i in range(N_post):
+        spk_record[step+1,i],mem_record[step+1,i] = post_neurons[i](cur_in_step[i], mem_record[step,i])
+
+    post_syn_spk = spk_record[step+1,:]
+    
+    # update the weights
+    my_synapses.update_weights([pre_syn_spikes.detach().numpy(),post_syn_spk])
+    W = my_synapses.W
+
+# convert the results to torch tensors
+mem_record = torch.from_numpy(mem_record[1:,:])
+spk_record = torch.from_numpy(spk_record[1:,:])
+
+
+plot_results_21(time_steps, cur_in, spk_record, my_synapses.get_records()['W'][1:,1,:])
+## 2.2 Conductance-based LIF
+# basic variables
+N_pre = 10
+N_post = 1
+num_steps = 100
+
+# parameters of the simulation
+pars = default_pars(type_parameters='simple', 
+                    w_init_value = 0.1)
+time_steps = np.arange(num_steps) * pars['dt']
+rate = 0.05
+
+#generate input spikes
+#cur_in = repeat_ones(num_steps, N_pre, silent_time = 8 )
+cur_in = Poisson_generator(pars['dt'], rate, N_pre, num_steps)
+cur_in = torch.from_numpy(cur_in)
+
+# initialize the weights
+W = weight_initializer(pars,  N_post, I=cur_in, type_init=3) #* np.random.rand(N_post,N_pre) # noise added to appreciate different STDP dynamics
+W = torch.from_numpy(W)
+
+# initialize postsynaptic neurons
+beta = np.exp(-pars['dt']/pars['tau_m'] *(1+pars['max_g']))
+alpha = np.exp(-pars['dt']/pars['tau_syn_exc'])
+rm = 'zero' if pars['hard_reset'] else 'subtract' 
+thr = pars['threshold']
+post_neurons = [ snn.Synaptic(alpha = alpha, beta = beta, threshold=thr, reset_mechanism=rm) for _ in range(N_post)]
+
+# initialize the tracking variables
+mem_record = np.zeros((num_steps+1, N_post))
+spk_record = np.zeros((num_steps+1, N_post))
+cond_record = np.zeros((num_steps+1, N_post))
+#mem_record[0,:] = np.asarray([0 for i in range(N_post)])
+#spk_record[0,:] = np.asarray([0 for i in range(N_post)])
+#cond_record[0,:] = np.asarray([0 for i in range(N_post)])
+
+# intialize the synapses
+my_synapses = STDP_synapse(pars, N_pre, N_post, W_init = W ) # this works even if now W is a tensor!
+
+# run the simulation
+for step in range(num_steps):
+    # current injected at this time step
+    pre_syn_spikes = cur_in[step]
+    cur_in_step = W @ pre_syn_spikes
+
+    #spike generated by the layer
+    for i in range(N_post):
+        spk, cond, mem = post_neurons[i](cur_in_step[i], cond_record[step, i], mem_record[step,i])
+        spk_record[step+1,i] = spk
+        mem_record[step+1,i] = mem
+        cond_record[step+1,i] = cond
+
+    post_syn_spk = spk_record[step+1,:]
+    
+    # update the weights
+    my_synapses.update_weights([pre_syn_spikes.detach().numpy(),post_syn_spk])
+    W = my_synapses.W
+
+# convert the results to torch tensors
+mem_record = torch.from_numpy(mem_record[1:,:])
+spk_record = torch.from_numpy(spk_record[1:,:])
+
+plot_results_21(time_steps, cur_in, spk_record, my_synapses.get_records()['W'][1:,0,:])
+
+
+
+# 3. Simple SNNs built with SNNTorch
+## 3.1 Build an SNN with 1 FC layer, Leaky Neuron, STDP
+# basic variables
+N_pre = 28*28
+N_post = 1
+batch_size = 0 # for the moment we do not use batch size
+num_steps = 100
+rate = 0.05
+
+class snn_stdp0(nn.Module):
+
+    def __init__(self, pars, N_pre, N_post = 1, neuron_type = 'Leaky'):
+        super(snn_stdp0, self).__init__()
+        self.pars = pars
+        self.beta = pars.get('beta', 0.8)
+        self.w_max = pars.get('w_max', 1.0)
+        self.w_min = pars.get('w_min', 0.0)
+        self.fc = nn.Linear(N_pre, N_post, bias=False)
+        # clamp the weight to positive values
+        self.fc.weight.data = torch.clamp(self.fc.weight.data, min=self.w_min, max=self.w_max)
+        # set the weight of the layer
+        #W_init = weight_initializer(pars, N_pre, N_post, type_init = 3, tensor = True)
+        #self.fc.weight = nn.Parameter(W_init)
+        reset_mechanism = 'zero' if pars['hard_reset'] else 'subtract'
+        self.lif = snn.Leaky(beta = beta, threshold = pars['threshold'], reset_mechanism = reset_mechanism)
+
+    def forward(self, x):
+        # initiliaze the membrane potential and the spike
+        mem = self.lif.init_leaky()
+
+        #tracking variables
+        mem_rec = []
+        spk_rec = []
+
+        pre_syn_traces = generate_traces(self.pars, x)
+        post_syn_traces = torch.zeros((x.shape[0]+1, N_post))
+        weight_history = torch.zeros((x.shape[0]+1, N_post, N_pre))
+        weight_history[0,:,:] = self.fc.weight.data
+
+        for step in range(x.shape[0]):
+            # run the fc layer
+            cur_step = self.fc(x[step])
+            # run thw lif neuron
+            spk, mem = self.lif(cur_step, mem)
+
+            # store the membrane potential and the spike
+            mem_rec.append(mem)
+            spk_rec.append(spk)
+
+            # updatae post synaptic traces
+            beta_minus = self.pars.get('beta_minus',0.9)
+            post_syn_traces[step+1, :] = beta_minus*post_syn_traces[step, :] + spk
+
+            # update the weights
+            weight_history[step,:,:] = self.fc.weight.data
+            A_plus, A_minus = self.pars['A_plus'], self.pars['A_minus']
+            LTP = A_plus * torch.outer(spk, pre_syn_traces[step,:]) 
+            LTD = A_minus * torch.outer(post_syn_traces[step+1,:], x[step])
+            self.fc.weight.data = self.fc.weight.data + LTP - LTD
+            # hard constrain on the weights
+            self.fc.weight.data = torch.clamp(self.fc.weight.data, min=self.w_min, max=self.w_max)
+
+
+        post_syn_traces = post_syn_traces[:-1,:]
+        weight_history = weight_history[:-1,:,:]
+
+
+
+        return torch.stack(mem_rec), torch.stack(spk_rec), pre_syn_traces, post_syn_traces, weight_history
+    
+
+
+
+# parameters of the simulation
+pars = default_pars(type_parameters='simple', 
+                    w_init_value = 0.012,
+                    alpha = 0.9,
+                    beta = 0.8,
+                    threshold = 1.0,
+                    hard_reset = True,
+                    A_minus = 0.0088 ,
+                    A_plus = 0.008,
+                    beta_minus = 0.9,
+                    beta_plus = 0.9)
+
+# generate the input spikes
+cur_in = Poisson_generator(pars['dt'], rate, N_pre, num_steps, batch_size = batch_size)
+cur_in = torch.from_numpy(cur_in)
+cur_in = cur_in.to(dtype = torch.float32, device = device)
+
+# intitilize the model
+my_model = snn_stdp0(pars, N_pre, N_post, 'Synaptic')
+
+# run the simulation
+my_model.train()
+mem_rec, spk_rec, pre_trace, post_trace, weight_history = my_model.forward(cur_in)
+
+plot_results_31(pars['dt'], cur_in, pre_trace, mem_rec, spk_rec, post_trace, weight_history, N_pre, N_post, num_steps)
 
 
 
