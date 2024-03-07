@@ -32,10 +32,6 @@ importlib.reload(importlib.import_module('neurons'))
 importlib.reload(importlib.import_module('learning_rules'))
 importlib.reload(importlib.import_module('plot_utils'))
 importlib.reload(importlib.import_module('experiments'))
-from experiments import *
-from neurons import *
-from learning_rules import *
-from plot_utils import *
 
 global simulation
 global Poisson_generator
@@ -43,6 +39,16 @@ global half_growing_rate
 global random_shifted_trains
 global random_offsets
 global weight_initializer
+
+from experiments import *
+from neurons import *
+from learning_rules import *
+from plot_utils import *
+
+
+
+
+
 
 
 

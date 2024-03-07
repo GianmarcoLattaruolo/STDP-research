@@ -1676,3 +1676,74 @@ spike_data = spikegen.rate(data_it, num_steps=num_steps, gain = 1)
 
 print(f'Size of a batch of spike data is {spike_data.size()}')
 
+
+
+
+    # these other two plotting methods are obsolete and my not work properly
+    def plot_neuron_records(self, n_neurons_to_plot = 1):
+
+        syn_conductance = torch.stack(self.neuron_records['syn']).reshape(-1, self.n_neurons).detach().numpy()[:, :n_neurons_to_plot]
+        mem_potential = torch.stack(self.neuron_records['mem']).reshape(-1, self.n_neurons).detach().numpy()[:, :n_neurons_to_plot]
+        spk_rec = torch.stack(self.neuron_records['spk']).reshape(-1, self.n_neurons)
+
+        fig, ax = plt.subplots(3, figsize=(12,10), sharex=True,  gridspec_kw={'height_ratios': [1, 1, 0.5]})
+        lw = max(100/self.input_size, 0.5)
+
+        time_steps = np.arange(mem_potential.shape[0]* self.forward_count)*self.pars['dt']
+
+        # plot the neuron conductance
+        ax[0].plot(syn_conductance, alpha = 0.8, lw = lw)
+        ax[0].set_ylabel('Conductance')
+        ax[0].set_title(f'Synaptic Conductance during presentation of {self.batch_size} images')
+            
+        # plot the membrane potential
+        ax[1].plot( mem_potential, alpha = 0.8, lw=lw)
+        if self.pars['dynamic_threshold']:
+            threshold_history = torch.stack(self.neuron_records['threshold']).reshape(-1, self.n_neurons).detach().numpy()
+            ax[1].plot(threshold_history[:, :n_neurons_to_plot], '--', color = 'red')
+        else:
+            ax[1].hlines(self.pars['threshold'], 0, mem_potential.shape[0], 'k', 'dashed', color = 'red')
+        ax[1].set_ylabel('Membrane Potential')
+        ax[1].set_title(f'Membrane Potential during presentation of {self.batch_size} images for the first {n_neurons_to_plot} neurons')
+
+        # plot the spikes
+        height = ax[2].bbox.height
+        ax[2].scatter(*torch.where(spk_rec), s=2*height/self.n_neurons, c="black", marker="|", lw = lw)
+        ax[2].set_ylim([0-0.5, self.n_neurons-0.5])
+        spk_rec = spk_rec+0.0
+        ax[2].set_title(f"Mean output firing rate: {spk_rec.mean():.5f} ")
+        ax[2].set_ylabel("Neuron index")
+        ax[2].set_xlabel("Time step")
+
+        plt.show()
+        return
+
+
+    def plot_synapse_records(self, n_neurons_to_plot = 1, weight_index = 0):
+
+        #THIS DOES NOT WORK PROPERLY
+        
+        pre_syn_traces = self.synapse_records['pre_trace'].detach().numpy()[:,:n_neurons_to_plot]
+        post_syn_traces = torch.stack(self.synapse_records['post_trace']).detach().numpy()
+        weight_history = torch.stack(self.synapse_records['W']).detach().numpy()[:,weight_index,:n_neurons_to_plot]
+
+        fig, ax = plt.subplots(3, figsize=(12,10), sharex=True,  gridspec_kw={'height_ratios': [0.6, 0.6, 1]})
+        lw = max(100/self.input_size, 0.5)
+        # pre synaptic traces plot
+        ax[0].plot(self.time_steps, pre_syn_traces, alpha = 0.8, lw = lw)
+        ax[0].set_ylabel('Pre-trace')
+        ax[0].set_title('Pre-synaptic traces')
+
+        # post synaptic traces plot
+        ax[1].plot(self.time_steps, post_syn_traces, alpha = 0.8, lw = lw)
+        ax[1].set_ylabel('Post-trace')
+        ax[1].set_title('Post-synaptic traces')
+
+        # weights plot
+        ax[2].plot(weight_history, alpha = 0.5)
+        ax[2].set_ylabel('Weight')
+        ax[2].set_title(f'Synaptic weights history of neuron {weight_index}')
+
+        plt.show()
+        return
+    

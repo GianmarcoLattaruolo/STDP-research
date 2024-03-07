@@ -21,16 +21,16 @@ my_layout = widgets.Layout()
 my_layout.width = '620px'
 
 #machine Learning libraries
-#machine Learning libraries
 import torch
 import torch.nn as nn
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
 import snntorch as snn
 import snntorch.spikeplot as splt
 from snntorch import utils
 from snntorch import spikegen
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+# optimization libraries
+import optuna
 
 
 #import from my scripts
@@ -42,15 +42,26 @@ import importlib
 
 importlib.reload(importlib.import_module('snn_experiments'))
 importlib.reload(importlib.import_module('snn_plot_utils'))
+importlib.reload(importlib.import_module('snn_datasets'))
 
+
+global mnist_pars
+global rate_encoded_mnist
 from snn_experiments import *
 from snn_plot_utils import *
+from snn_datasets import *
 
 
 
 
 
-####################################
+##########################################
+#                                        #
+#   MAIN CLASS TO CREATE A SNN MODEL     #
+#                                        #
+##########################################
+
+
 class snn_mnist(nn.Module):
 
 
@@ -75,7 +86,7 @@ class snn_mnist(nn.Module):
         # SNN structure
         self.input_size = input_size
         self.fc = nn.Linear(input_size, n_neurons, bias=False)
-        self.fc.weight.data = torch.clamp(self.fc.weight.data, min=self.w_min, max=self.w_max)
+        self.fc.weight.data = self.weight_initializer()
         self.lif = snn.Synaptic(alpha = self.alpha,
                                 beta = self.beta, 
                                 threshold = pars['threshold'], 
@@ -91,6 +102,16 @@ class snn_mnist(nn.Module):
         self.synapse_records = {'pre_trace': [], 'post_trace': [], 'W': []}
         self.forward_count = 0
         self.num_input_spikes = 0
+
+
+    def weight_initializer(self): # sill in development
+        
+        if self.pars.get('weight_initialization_type', 'clamp') == 'clamp':
+            return torch.clamp(self.fc.weight.data, min=self.w_min, max=self.w_max)
+        elif self.pars['weight_initialization_type'] == 'shift':
+            W = self.fc.weight.data
+            W = W - W.min() + 0.001
+            return W
 
 
     def get_records(self):
@@ -524,8 +545,90 @@ class snn_mnist(nn.Module):
         return rates
 
 
-    # plot the simulation records
-    def plot_simulation_records(self, manual_update = False):
+    # plot the simulation records, still in development
+    def plot_simulation(self, neuron_index=0, n_highlight=10, plot_syn_conductance=False, plot_post_trace=False, plot_weights_distribution=False):
+        # compute the total number of times steps experienced by the network in the training phase
+        self.tot_sim_time = self.forward_count * self.num_steps * self.batch_size 
+
+        # retrive the records
+        records = self.get_records()
+
+        num_subplots = 3  # Default subplots
+
+        if plot_syn_conductance:
+            num_subplots += 1
+        if plot_post_trace:
+            num_subplots += 1
+        if plot_weights_distribution:
+            num_subplots += 1
+
+        fig, ax = plt.subplots(num_subplots, figsize=(12, 4 * num_subplots))
+        lw = max(min(100 / self.tot_sim_time, 1), 0.5)
+
+        # Plot the output spikes of the network
+        tot_input_mean = self.num_input_spikes / (self.tot_sim_time * self.input_size)
+        spk_rec = records['spk'].float()[-10000:,:]
+        #reduced_spk = torch.stack([(self.get_records()['spk'][i:i + 100, :]+0.0).mean(axis=0)  for i in range(0, model.get_records()['spk'].shape[0], 100)]) + 0.0
+        height = ax[0].bbox.height
+        ax[0].scatter(*torch.where(spk_rec), s = height/self.n_neurons, c="black", marker="|", lw=0.5)  # scatter is incredible slow
+        ax[0].set_ylim([0 - 0.5, self.n_neurons - 0.5])
+        ax[0].set_title(f"Mean output rate: {spk_rec.mean():.5f} - Mean input rate: {tot_input_mean:.5f}, last 10000 time steps")
+        ax[0].set_ylabel("Neuron index")
+
+        # Plot the membrane potential of the chosen neuron
+        mem_rec = records['mem'][:, neuron_index]
+        threshold_rec = records['threshold']
+        ax[1].plot(mem_rec, alpha=0.8, lw=lw)
+        if threshold_rec is not None:
+            ax[1].plot(threshold_rec[:, neuron_index], color='red', linestyle='--')
+        else:
+            ax[1].hlines(1, 1, self.tot_sim_time/self.t + 1, color='red', linestyle='--')
+        ax[1].set_ylabel("Membrane Potential")
+        ax[1].set_title("Membrane Potential and Output Spikes")
+
+        # Plot the synaptic conductance of the chosen neuron if selected
+        if plot_syn_conductance:
+            syn_rec = records['syn'][:, neuron_index]
+            ax[2].plot(syn_rec, alpha=0.8, lw=lw)
+            ax[2].set_ylabel("Neuron conductance")
+            ax[2].set_title(f"Neuron conductance, mean: {syn_rec.mean():.2f}")
+
+        # Plot the post synaptic traces of the chosen neuron if selected
+        if plot_post_trace:
+            post_trace_rec = records['post_trace'][:, neuron_index]
+            ax[2 + plot_syn_conductance].plot(post_trace_rec, alpha=0.8, lw=lw)
+            ax[2 + plot_syn_conductance].set_ylabel("Post-synaptic trace")
+            ax[2 + plot_syn_conductance].set_title(f"Post-synaptic trace, mean: {post_trace_rec.mean():.2f}")
+
+        # Plot the weights evolution of the chosen neuron
+        W_rec = records['W'][:, neuron_index, :]
+        cor_weights = pd.DataFrame(W_rec[:, :n_highlight])
+        uncor_weights = pd.DataFrame(W_rec[:, n_highlight:])
+        cor_weights.plot(ax=ax[2 + plot_syn_conductance + plot_post_trace], legend=False, color='tab:red', alpha=0.8, lw=2 * lw)
+        uncor_weights.plot(ax=ax[2 + plot_syn_conductance + plot_post_trace], legend=False, color='tab:blue', alpha=0.2, lw=lw)
+        ax[2 + plot_syn_conductance + plot_post_trace].set_ylabel("Synaptic Weight")
+        ax[2 + plot_syn_conductance + plot_post_trace].set_xlabel("Time step")
+
+        if plot_weights_distribution:
+            # Plot the final weights distribution of the chosen neuron
+            time_step = -1
+            w_min = np.min(W_rec[time_step, :]) - 0.0001
+            w_max = np.max(W_rec[time_step, :]) + 0.0001
+            width = (w_max - w_min) / 51
+            bins = np.arange(w_min, w_max, width)
+            ax[3 + plot_syn_conductance + plot_post_trace].hist(W_rec[time_step, :n_highlight], bins=bins, color='tab:red', alpha=0.5, label=f'first {n_highlight} synapses')
+            ax[3 + plot_syn_conductance + plot_post_trace].hist(W_rec[time_step, n_highlight:], bins=bins, color='tab:blue', alpha=0.5, label=f'remaining {self.input_size - n_highlight} synapses')
+            ax[3 + plot_syn_conductance + plot_post_trace].set_xlabel("Synaptic Weight")
+            ax[3 + plot_syn_conductance + plot_post_trace].set_ylabel("Frequency")
+            ax[3 + plot_syn_conductance + plot_post_trace].legend(loc='best')
+            ax[3 + plot_syn_conductance + plot_post_trace].set_title("Synaptic Weight Distribution")
+
+        plt.tight_layout()
+        plt.show()
+        return 
+
+
+    def plot_simulation_interactive(self, manual_update = False):
 
         # compute the total number of times steps experienced by the network in the training phase
         self.tot_sim_time = self.forward_count * self.num_steps * self.batch_size 
@@ -536,16 +639,16 @@ class snn_mnist(nn.Module):
         def main_plot( neuron_index = 0, n_highlight = 10):
 
             # plot the records
-            fig, ax = plt.subplots(6, figsize=(12,22), gridspec_kw={'height_ratios': [0.4, 1, 0.8, 0.8, 1.4, 0.8]})
+            fig, ax = plt.subplots(3, figsize=(12,15), gridspec_kw={'height_ratios': [1,1,1]})
             lw = max(min(100/self.tot_sim_time,1), 0.5)
 
             # plot the output spikes of the network
             tot_input_mean = self.num_input_spikes / (self.tot_sim_time * self.input_size)
-            spk_rec = records['spk'].float()
+            spk_rec = records['spk'].float()[-10000:,:]
             height = ax[0].bbox.height
             ax[0].scatter(*torch.where(spk_rec), s=2*height, c="black", marker="|", lw = lw )
             ax[0].set_ylim([0-0.5, self.n_neurons-0.5])
-            ax[0].set_title(f"Mean output firing rate: {spk_rec.mean():.5f} - Mean input firing rate: {tot_input_mean:.5f}")
+            ax[0].set_title(f"Mean output rate: {spk_rec.mean():.5f} - Mean inputrate: {tot_input_mean:.5f} last 10000 time steps")
             ax[0].set_ylabel("Neuron index")
 
             # plot the membrane potential of the choosen neuron
@@ -555,44 +658,19 @@ class snn_mnist(nn.Module):
             if threshold_rec is not None:
                 ax[1].plot(threshold_rec[:,neuron_index], color = 'red', linestyle = '--')
             else:
-                ax[1].hlines(1, 1, self.tot_sim_time + 1, color = 'red', linestyle = '--')
-            ax[3].set_ylabel("Membrane Potential")
-            ax[3].set_title("Membrane Potential and Output Spikes")
-
-            # plot the synaptic conductance of the choosen neuron
-            syn_rec = records['syn'][:,neuron_index]
-            ax[2].plot(syn_rec, alpha = 0.8, lw = lw)
-            ax[2].set_ylabel("Neuron conductance")
-            ax[2].set_title(f"Neuron conductance, mean: {syn_rec.mean():.2f}")
-
-            # plot the post synaptic traces of the choosen neuron
-            post_trace_rec = records['post_trace'][:,neuron_index]
-            ax[3].plot(post_trace_rec, alpha = 0.8, lw = lw)
-            ax[3].set_ylabel("Post-synaptic trace")
-            ax[3].set_title(f"Post-synaptic trace, mean: {post_trace_rec.mean():.2f}")
+                ax[1].hlines(1, 1, self.tot_sim_time/self.t + 1, color = 'red', linestyle = '--')
+            ax[1].set_ylabel("Membrane Potential")
+            ax[1].set_title("Membrane Potential and Output Spikes")
 
             # plot the weights evolution of the choosen neuron
             W_rec = records['W'][:,neuron_index,:]
             cor_weights = pd.DataFrame(W_rec[:, :n_highlight])
             uncor_weights = pd.DataFrame(W_rec[:, n_highlight:])
-            cor_weights.plot(ax = ax[4], legend = False, color = 'tab:red', alpha = 0.8, lw = 2*lw)
-            uncor_weights.plot(ax = ax[4], legend = False, color = 'tab:blue', alpha = 0.2, lw = lw)
-            ax[4].set_ylabel("Synaptic Weight")
-            ax[4].set_xlabel("Time step")
+            cor_weights.plot(ax = ax[2], legend = False, color = 'tab:red', alpha = 0.8, lw = 2*lw)
+            uncor_weights.plot(ax = ax[2], legend = False, color = 'tab:blue', alpha = 0.2, lw = lw)
+            ax[2].set_ylabel("Synaptic Weight")
+            ax[2].set_xlabel("Time step")
 
-            # plot the final weights distribution of the choosen neuron
-            time_step = -1
-            w_min = np.min(W_rec[time_step,:])-0.0001
-            w_max = np.max(W_rec[time_step,:])+0.0001
-            width = (w_max - w_min)/51
-            bins = np.arange(w_min, w_max, width)
-            ax[5].hist(W_rec[time_step,:n_highlight], bins = bins, color = 'tab:red', alpha = 0.5, label = f'first {n_highlight} synapses')
-            ax[5].hist(W_rec[time_step,n_highlight:], bins = bins, color = 'tab:blue', alpha = 0.5, label = f'remaining {self.input_size - n_highlight} synapses')
-            ax[5].set_xlabel("Synaptic Weight")
-            ax[5].set_ylabel("Frequency")
-            ax[5].legend(loc = 'best')
-
-            plt.show()
             return
         
         interactive_plot = widgets.interactive(
@@ -621,214 +699,11 @@ class snn_mnist(nn.Module):
         )
 
         display(interactive_plot)
+
         return
 
 
-
-    def plot_simulation_records2(self, manual_update=False):
-        # Compute the total number of time steps experienced by the network in the training phase
-        self.tot_sim_time = self.forward_count * self.num_steps * self.batch_size 
-
-        # Retrieve the records
-        records = self.get_records()
-
-        def main_plot(neuron_index=0, n_highlight=10, plot_syn_conductance=False, plot_post_trace=False, plot_weights_distribution=False):
-            num_subplots = 3  # Default subplots
-
-            if plot_syn_conductance:
-                num_subplots += 1
-            if plot_post_trace:
-                num_subplots += 1
-            if plot_weights_distribution:
-                num_subplots += 1
-
-            fig, ax = plt.subplots(num_subplots, figsize=(12, 4 * num_subplots))
-            lw = max(min(100 / self.tot_sim_time, 1), 0.5)
-
-            # Plot the output spikes of the network
-            tot_input_mean = self.num_input_spikes / (self.tot_sim_time * self.input_size)
-            spk_rec = records['spk'].float()
-            height = ax[0].bbox.height
-            ax[0].scatter(*torch.where(spk_rec), s=2 * height, c="black", marker="|", lw=lw)
-            ax[0].set_ylim([0 - 0.5, self.n_neurons - 0.5])
-            ax[0].set_title(f"Mean output firing rate: {spk_rec.mean():.5f} - Mean input firing rate: {tot_input_mean:.5f}")
-            ax[0].set_ylabel("Neuron index")
-
-            # Plot the membrane potential of the chosen neuron
-            mem_rec = records['mem'][:, neuron_index]
-            threshold_rec = records['threshold']
-            ax[1].plot(mem_rec, alpha=0.8, lw=lw)
-            if threshold_rec is not None:
-                ax[1].plot(threshold_rec[:, neuron_index], color='red', linestyle='--')
-            else:
-                ax[1].hlines(1, 1, self.tot_sim_time + 1, color='red', linestyle='--')
-            ax[1].set_ylabel("Membrane Potential")
-            ax[1].set_title("Membrane Potential and Output Spikes")
-
-            # Plot the synaptic conductance of the chosen neuron if selected
-            if plot_syn_conductance:
-                syn_rec = records['syn'][:, neuron_index]
-                ax[2].plot(syn_rec, alpha=0.8, lw=lw)
-                ax[2].set_ylabel("Neuron conductance")
-                ax[2].set_title(f"Neuron conductance, mean: {syn_rec.mean():.2f}")
-
-            # Plot the post synaptic traces of the chosen neuron if selected
-            if plot_post_trace:
-                post_trace_rec = records['post_trace'][:, neuron_index]
-                ax[2 + plot_syn_conductance].plot(post_trace_rec, alpha=0.8, lw=lw)
-                ax[2 + plot_syn_conductance].set_ylabel("Post-synaptic trace")
-                ax[2 + plot_syn_conductance].set_title(f"Post-synaptic trace, mean: {post_trace_rec.mean():.2f}")
-
-            # Plot the weights evolution of the chosen neuron
-            W_rec = records['W'][:, neuron_index, :]
-            cor_weights = pd.DataFrame(W_rec[:, :n_highlight])
-            uncor_weights = pd.DataFrame(W_rec[:, n_highlight:])
-            cor_weights.plot(ax=ax[2 + plot_syn_conductance + plot_post_trace], legend=False, color='tab:red', alpha=0.8, lw=2 * lw)
-            uncor_weights.plot(ax=ax[2 + plot_syn_conductance + plot_post_trace], legend=False, color='tab:blue', alpha=0.2, lw=lw)
-            ax[2 + plot_syn_conductance + plot_post_trace].set_ylabel("Synaptic Weight")
-            ax[2 + plot_syn_conductance + plot_post_trace].set_xlabel("Time step")
-
-            # Plot the final weights distribution of the chosen neuron
-            time_step = -1
-            w_min = np.min(W_rec[time_step, :]) - 0.0001
-            w_max = np.max(W_rec[time_step, :]) + 0.0001
-            width = (w_max - w_min) / 51
-            bins = np.arange(w_min, w_max, width)
-            ax[3 + plot_syn_conductance + plot_post_trace].hist(W_rec[time_step, :n_highlight], bins=bins, color='tab:red', alpha=0.5, label=f'first {n_highlight} synapses')
-            ax[3 + plot_syn_conductance + plot_post_trace].hist(W_rec[time_step, n_highlight:], bins=bins, color='tab:blue', alpha=0.5, label=f'remaining {self.input_size - n_highlight} synapses')
-            ax[3 + plot_syn_conductance + plot_post_trace].set_xlabel("Synaptic Weight")
-            ax[3 + plot_syn_conductance + plot_post_trace].set_ylabel("Frequency")
-            ax[3 + plot_syn_conductance + plot_post_trace].legend(loc='best')
-
-            plt.tight_layout()
-            plt.show()
-
-        
-
-        plot_syn_conductance_widget = widgets.Checkbox(
-            value=False,
-            description='Plot synaptic conductance',
-            style={'description_width': 'initial'}
-        )
-
-        plot_post_trace_widget = widgets.Checkbox(
-            value=False,
-            description='Plot post-synaptic trace',
-            style={'description_width': 'initial'}
-        )
-
-        plot_weights_distribution_widget = widgets.Checkbox(
-            value=False,
-            description='Plot weights distribution',
-            style={'description_width': 'initial'}
-        )
-
-        
-
-        interactive_plot = widgets.interactive(
-            main_plot,
-        {'manual': manual_update, 'manual_name': 'Update plot'},
-        neuron_index = widgets.IntSlider(
-            value=0, 
-            min=0,
-            max=self.n_neurons-1, 
-            step=1, 
-            description='Neuron index', 
-            style = {'description_width': 'initial'},
-            layout=widgets.Layout(width='600px'),
-            continuous_update=False
-            ),
-        n_highlight = widgets.IntSlider(
-            value=10,
-            min=1,
-            max=self.input_size-1,
-            step=1,
-            description='Number of highlighted synapses',
-            style = {'description_width': 'initial'},
-            layout=widgets.Layout(width='600px'),
-            continuous_update=False
-            ),
-            plot_syn_conductance=plot_syn_conductance_widget,
-            plot_post_trace=plot_post_trace_widget,
-            plot_weights_distribution=plot_weights_distribution_widget,
-        )
-        pre = interactive_plot.childre[:2]
-        check_boxes = interactive_plot.children[2:-1]
-        post = interactive_plot.children[-1:]
-        final_widget = widgets.VBox([*pre,check_boxes, *post])
-        display(final_widget)
-        return 
-
-
-    # these other two plotting methods are obsolete and my not work properly
-    def plot_neuron_records(self, n_neurons_to_plot = 1):
-
-        syn_conductance = torch.stack(self.neuron_records['syn']).reshape(-1, self.n_neurons).detach().numpy()[:, :n_neurons_to_plot]
-        mem_potential = torch.stack(self.neuron_records['mem']).reshape(-1, self.n_neurons).detach().numpy()[:, :n_neurons_to_plot]
-        spk_rec = torch.stack(self.neuron_records['spk']).reshape(-1, self.n_neurons)
-
-        fig, ax = plt.subplots(3, figsize=(12,10), sharex=True,  gridspec_kw={'height_ratios': [1, 1, 0.5]})
-        lw = max(100/self.input_size, 0.5)
-
-        time_steps = np.arange(mem_potential.shape[0]* self.forward_count)*self.pars['dt']
-
-        # plot the neuron conductance
-        ax[0].plot(syn_conductance, alpha = 0.8, lw = lw)
-        ax[0].set_ylabel('Conductance')
-        ax[0].set_title(f'Synaptic Conductance during presentation of {self.batch_size} images')
-            
-        # plot the membrane potential
-        ax[1].plot( mem_potential, alpha = 0.8, lw=lw)
-        if self.pars['dynamic_threshold']:
-            threshold_history = torch.stack(self.neuron_records['threshold']).reshape(-1, self.n_neurons).detach().numpy()
-            ax[1].plot(threshold_history[:, :n_neurons_to_plot], '--', color = 'red')
-        else:
-            ax[1].hlines(self.pars['threshold'], 0, mem_potential.shape[0], 'k', 'dashed', color = 'red')
-        ax[1].set_ylabel('Membrane Potential')
-        ax[1].set_title(f'Membrane Potential during presentation of {self.batch_size} images for the first {n_neurons_to_plot} neurons')
-
-        # plot the spikes
-        height = ax[2].bbox.height
-        ax[2].scatter(*torch.where(spk_rec), s=2*height/self.n_neurons, c="black", marker="|", lw = lw)
-        ax[2].set_ylim([0-0.5, self.n_neurons-0.5])
-        spk_rec = spk_rec+0.0
-        ax[2].set_title(f"Mean output firing rate: {spk_rec.mean():.5f} ")
-        ax[2].set_ylabel("Neuron index")
-        ax[2].set_xlabel("Time step")
-
-        plt.show()
-        return
-
-
-    def plot_synapse_records(self, n_neurons_to_plot = 1, weight_index = 0):
-
-        #THIS DOES NOT WORK PROPERLY
-        
-        pre_syn_traces = self.synapse_records['pre_trace'].detach().numpy()[:,:n_neurons_to_plot]
-        post_syn_traces = torch.stack(self.synapse_records['post_trace']).detach().numpy()
-        weight_history = torch.stack(self.synapse_records['W']).detach().numpy()[:,weight_index,:n_neurons_to_plot]
-
-        fig, ax = plt.subplots(3, figsize=(12,10), sharex=True,  gridspec_kw={'height_ratios': [0.6, 0.6, 1]})
-        lw = max(100/self.input_size, 0.5)
-        # pre synaptic traces plot
-        ax[0].plot(self.time_steps, pre_syn_traces, alpha = 0.8, lw = lw)
-        ax[0].set_ylabel('Pre-trace')
-        ax[0].set_title('Pre-synaptic traces')
-
-        # post synaptic traces plot
-        ax[1].plot(self.time_steps, post_syn_traces, alpha = 0.8, lw = lw)
-        ax[1].set_ylabel('Post-trace')
-        ax[1].set_title('Post-synaptic traces')
-
-        # weights plot
-        ax[2].plot(weight_history, alpha = 0.5)
-        ax[2].set_ylabel('Weight')
-        ax[2].set_title(f'Synaptic weights history of neuron {weight_index}')
-
-        plt.show()
-        return
-    
-
+ 
 
 
 ####################################
@@ -838,9 +713,10 @@ class snn_mnist(nn.Module):
 ####################################
     
 
-def train_model(model, train_loader, val_loader, num_epochs = 1) :   
+def train_model(model, train_loader, val_loader = None, num_epochs = 1, val_accuracy_record = True) :   
     
-    #records_full = {f'epochs_{i}': {f'image_{j}': [] for j in range(len(data_train))} for i in range(num_epochs)}
+    if val_accuracy_record and val_loader is None:
+        raise ValueError("If val_accuracy_record is set to True, val_loader must be provided")
 
     with torch.no_grad():
         for epochs in range(num_epochs):
@@ -877,18 +753,17 @@ def train_model(model, train_loader, val_loader, num_epochs = 1) :
                     # Update progress bar
                     pbar.update(1) 
 
+                if val_accuracy_record:
+                    # assign the label to the neurons
+                    temp_assignments = assign_neurons_to_classes(model, val_loader, verbose = 0 )
 
-                    #records_full[f'epochs_{epochs}'][f'image_{index}'] = model.get_records()['W'][::10]
-                    #model.reset_records()
+                    # compute the accuracy so far
+                    accuracy = classify_test_set(model, val_loader, temp_assignments, verbose = 0)
 
-                # assign the label to the neurons
-                temp_assignments = assign_neurons_to_classes(model, val_loader, verbose = 0 )
-
-                # compute the accuracy so far
-                accuracy = classify_test_set(model, val_loader, temp_assignments, verbose = 0)
-
-                pbar.set_postfix(accuracy=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
-                #pbar.set_postfix( time=f'{time.time() - start_time:.2f}s')
+                    # update the progress bar
+                    pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
+                else:
+                    pbar.set_postfix( time=f'{time.time() - start_time:.2f}s')
 
     return model
 
@@ -947,9 +822,6 @@ def assign_neurons_to_classes(model, val_loader, verbose = 1):
 def classify_test_set(model, test_loader, assignments, verbose = 1):
     # use the assignments to classify the test set
 
-    # retrive the batch size
-    batch_size = test_loader.batch_size
-
     accuracy_record = 0
 
     start_time = time.time()
@@ -978,7 +850,110 @@ def classify_test_set(model, test_loader, assignments, verbose = 1):
 
 
 
+##########################################
+#                                        #
+#     HYPERPARAMETERS OPTIMIZATION       #
+#                                        #
+##########################################
 
+
+def define_model(trial):
+
+    STDP_type = trial.suggest_categorical('STDP_type', ['classic', 'offset'])
+    if STDP_type == 'offset':
+        STDP_offset = trial.suggest_float("STDP_offset", 0.0001, 0.1, log = True)
+        learning_rate = trial.suggest_float("learning_rate", 0.0001, 0.1, log = True)
+        A_minus, A_plus = 0.0, 0.0
+        beta_plus = 0.0 # we don't need post synaptic traces if we use the offset STDP
+    else:
+        STDP_offset = 0.0
+        A_minus = trial.suggest_float("A_minus", 0.0001, 0.1, log = True)
+        A_plus = trial.suggest_float("A_plus", 0.0001, 0.1, log = True)
+        beta_plus = trial.suggest_float("beta_plus", 0.1, 1.0 )
+        learning_rate = 0.0 # we don't need learning rate if we use the classic STDP
+
+    pars = mnist_pars(
+        weight_initialization_type = 'clamp',
+        STDP_type = STDP_type,
+        A_minus = A_minus,
+        A_plus = A_plus,
+        beta_minus = trial.suggest_float("beta_minus", 0.1, 1.0 ),
+        beta_plus = beta_plus,
+        STDP_offset = STDP_offset,
+        learning_rate = learning_rate,
+        reset_mechanism = trial.suggest_categorical("reset_mechanism", ['subtract', 'zero']),
+        alpha = trial.suggest_float("alpha", 0.1, 1.0 ),
+        beta = trial.suggest_float("beta", 0.1, 1.0 ),
+        dynamic_threshold = True,
+        refractory_period = False,
+        lateral_inhibition = True,
+        lateral_inhibition_strength = trial.suggest_float("inhi_strength", 0.01, 10.0, log = True),
+        min_spk_number = 5,
+        t = 10
+    )
+
+    # define the model
+    input_size = 28*28
+    n_neurons = trial.suggest_int("n_neurons", 16, 256, step = 16)
+    model = snn_mnist(pars, input_size, n_neurons)
+
+    return model
+
+def objective(trial):
+    # use cuda if available
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+
+    # define the model
+    model = define_model(trial).to(device)
+
+    # define the data loader
+    batch_size = trial.suggest_categorical("batch_size", [30,60,100,200])
+    num_steps = trial.suggest_int("num_steps", 50, 350, step = 50)
+    gain = 1.
+    mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, train=True, my_seed = 42)
+    subset_loader = mnist_train.get_subset(100)
+
+    # train the model
+    num_epochs = 3
+    with torch.no_grad():
+        for epochs in range(num_epochs):
+            start_time = time.time()
+            with tqdm(total=len(subset_loader), unit='batch', ncols=120) as pbar:
+
+                # Iterate through minibatches
+                for index, (data_it, _) in enumerate(subset_loader):
+
+                    # forward pass
+                    model.forward(data_it)
+
+                    # check that all the neurons have emitted at least min_spk_number spikes
+                    flag = np.min(model.get_records()['spk'].numpy().sum(axis = 0)) < model.pars['min_spk_number']
+                    if flag:
+                        print(f"Epoch {epochs} - Batch {index} - Neurons have not reached the minimum number of spikes")
+
+                    # Update progress bar
+                    pbar.update(1)
+
+                # assign the label to the neurons
+                temp_assignments = assign_neurons_to_classes(model, subset_loader, verbose = 0 )
+
+                # compute the accuracy so far
+                accuracy = classify_test_set(model, subset_loader, temp_assignments, verbose = 0)
+
+                # update the progress bar
+                pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
+
+                # report the accuracy
+                trial.report(accuracy, epochs)
+
+                # handle pruning
+                if trial.should_prune():
+                    raise optuna.exceptions.TrialPruned()
+
+    return accuracy
+
+    
+    
 
 
 
