@@ -54,11 +54,12 @@ from snn_models import *
 
 class rate_encoded_mnist(torch.utils.data.Dataset):
 
-    def __init__(self, batch_size, num_steps=100, gain=1, train=True, data_path=r'.\data', my_seed=42):
+    def __init__(self, batch_size, num_steps=100, gain=1., min_rate = 0.0, train=True, data_path=r'.\data', my_seed=42):
 
         self.batch_size = batch_size
         self.num_steps = num_steps
         self.gain = gain
+        self.min_rate = min_rate
         # define the transformation
         transform = transforms.Compose([
                     transforms.Resize((28,28)),
@@ -85,8 +86,9 @@ class rate_encoded_mnist(torch.utils.data.Dataset):
         return data_sample, target
     
     def rate_encode(self, data_sample, num_steps, gain):
-        data_sample = data_sample.view(-1)
-        data_sample = data_sample*gain
+        data_sample = data_sample.view(-1) # 28x28 -> 784
+        data_sample = data_sample*gain # we multiply the data by a gain to increase the firing rate
+        data_sample = data_sample + torch.ones_like(data_sample)*self.min_rate # we add a minimum rate to ensure that the neurons are not silent
         data_sample = torch.clamp(data_sample, 0, 1)
         data_sample = data_sample.repeat(num_steps,1)
         data_sample = torch.bernoulli(data_sample, generator=self.my_generator)
@@ -129,18 +131,41 @@ class rate_encoded_mnist(torch.utils.data.Dataset):
             indices = torch.randperm(len(self.dataset), generator=self.my_generator).tolist()
             train_indices = indices[:train_size]
             val_indices = indices[train_size:train_size+val_size]
-            train_sampler = torch.utils.data.SubsetRandomSampler(train_indices, generator=self.my_generator)
-            val_sampler = torch.utils.data.SubsetRandomSampler(val_indices, generator=self.my_generator)
-            train_loader = torch.utils.data.DataLoader(dataset=self, batch_size = self.batch_size, sampler=train_sampler, collate_fn=self.custom_collate_fn)
-            val_loader = torch.utils.data.DataLoader(dataset=self, batch_size = self.batch_size, sampler=val_sampler, collate_fn=self.custom_collate_fn)
+            train_sampler = torch.utils.data.SubsetRandomSampler(train_indices, generator = self.my_generator)
+            val_sampler = torch.utils.data.SubsetRandomSampler(val_indices, generator = self.my_generator)
+            train_loader = torch.utils.data.DataLoader(dataset=self, batch_size = self.batch_size, sampler=train_sampler, collate_fn=self.custom_collate_fn, drop_last = True)
+            val_loader = torch.utils.data.DataLoader(dataset=self, batch_size = self.batch_size, sampler=val_sampler, collate_fn=self.custom_collate_fn, drop_last = True)
             return train_loader, val_loader
         elif not self.train:
-            test_loader = torch.utils.data.DataLoader(dataset=self, batch_size = self.batch_size, shuffle=False, collate_fn=self.custom_collate_fn)
+            # 10000 are already in the test
+            test_loader = torch.utils.data.DataLoader(dataset=self, batch_size = self.batch_size, shuffle=False, collate_fn=self.custom_collate_fn, drop_last= True)
             return test_loader
         
     def get_subset(self, subset=100):
         mnist_subset = utils.data_subset(self, subset)
-        subset_loader = DataLoader(mnist_subset, batch_size=self.batch_size, shuffle=True, collate_fn=self.custom_collate_fn)
+        subset_loader = DataLoader(mnist_subset, batch_size=self.batch_size, shuffle=True, collate_fn=self.custom_collate_fn, drop_last=True)
         return subset_loader
+    
+    def get_subset_train_val_test(self, subset=100):
+        # determine the size of the subsets
+        n_full = len(self.dataset)//subset
+        sub_train, sub_val, sub_test = n_full*4//6, n_full*1//6, n_full*1//6
+        # shuffle the indices
+        indices = torch.randperm(n_full, generator=self.my_generator).tolist()
+        train_indices = indices[:sub_train]
+        val_indices = indices[sub_train:sub_train+sub_val]
+        test_indices = indices[sub_train+sub_val:]
+        # create the samplers
+        train_sampler = torch.utils.data.SubsetRandomSampler(train_indices, generator = self.my_generator)
+        val_sampler = torch.utils.data.SubsetRandomSampler(val_indices, generator = self.my_generator)
+        test_sampler = torch.utils.data.SubsetRandomSampler(test_indices, generator = self.my_generator)
+        # create the loaders
+        sub_train_loader = torch.utils.data.DataLoader(dataset=self, batch_size = self.batch_size, sampler=train_sampler, collate_fn=self.custom_collate_fn, drop_last = True)
+        sub_val_loader = torch.utils.data.DataLoader(dataset=self, batch_size = self.batch_size, sampler=val_sampler, collate_fn=self.custom_collate_fn, drop_last = True)
+        sub_test_loader = torch.utils.data.DataLoader(dataset=self, batch_size = self.batch_size, sampler=test_sampler, collate_fn=self.custom_collate_fn, drop_last = True)
+        return sub_train_loader, sub_val_loader, sub_test_loader
+
+
+
         
         

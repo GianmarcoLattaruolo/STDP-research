@@ -1,0 +1,43 @@
+    RESULT WITH NO POPULTION CODING AND SAME SUBSET FOR TRAIN VAL AND TEST
+
+    """Study statistics: 
+  Number of finished trials: 1196
+  Number of pruned trials: 734
+  Number of complete trials: 461
+Best trial:
+  Value: 0.425
+  Params: 
+    STDP_type: classic
+    A_minus: 0.00027954484411271436
+    A_plus: 0.0001442689218829738
+    beta_plus: 0.34788654946213154
+    beta_minus: 0.14451712311116202
+    reset_mechanism: subtract
+    alpha: 0.9993130513614625
+    beta: 0.6859991520604786
+    inhi_strength: 0.728451296702614
+    n_neurons: 256
+    batch_size: 200
+    num_steps: 350"""
+
+
+
+"""Study statistics: 
+  Number of finished trials: 1520
+  Number of pruned trials: 982
+  Number of complete trials: 536
+Best trial:
+  Value: 0.4483333333333333
+  Params: 
+    STDP_type: classic
+    A_minus: 0.0003770341806421123
+    A_plus: 0.0002296736167976386
+    beta_plus: 0.42205826792240153
+    beta_minus: 0.6483338904571401
+    reset_mechanism: subtract
+    alpha: 0.9991858842991299
+    beta: 0.6861991007212728
+    inhi_strength: 0.8992961254522364
+    n_neurons: 240
+    batch_size: 200
+    num_steps: 350"""

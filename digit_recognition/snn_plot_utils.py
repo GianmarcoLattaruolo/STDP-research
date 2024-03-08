@@ -95,7 +95,7 @@ def plot_spk_cur_mem_spk(spk_in, syn_rec, mem_rec, mem_fmp_rec, spk_rec, title):
                             gridspec_kw = {'height_ratios': [0.4, 1, 1, 0.4]})
 
     # Plot input current
-    splt.raster(spk_in, ax[0], s=400, c="black", marker="|")
+    splt.raster(spk_in, ax[0], s=400, c="black", marker="|", lw=0.5)
     ax[0].set_ylabel("Input Spikes")
     ax[0].set_title("Synaptic Conductance-based Neuron Model With Input Spikes")
     ax[0].set_yticks([])

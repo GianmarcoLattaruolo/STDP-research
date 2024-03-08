@@ -62,6 +62,7 @@ from snn_datasets import *
 ##########################################
 
 
+
 class snn_mnist(nn.Module):
 
 
@@ -703,8 +704,6 @@ class snn_mnist(nn.Module):
         return
 
 
- 
-
 
 ####################################
 #                                  #
@@ -712,6 +711,7 @@ class snn_mnist(nn.Module):
 #                                  #
 ####################################
     
+
 
 def train_model(model, train_loader, val_loader = None, num_epochs = 1, val_accuracy_record = True) :   
     
@@ -797,10 +797,14 @@ def assign_neurons_to_classes(model, val_loader, verbose = 1):
         
         # forward pass
         model.eval()
-        f = model.forward_test(data_it)
+        f = model.forward_test(data_it)  # numpy array of shape (batch_size x n_neurons)
 
-        for f_index,target in enumerate(targets_it.tolist()):
-            rate_matrix[target] += f[f_index]
+        for f_index,target in enumerate(targets_it.tolist()):  
+
+            # in the row corresponding to the target add the firing rate of the neurons in response to that target
+            rate_matrix[target] += f[f_index] 
+
+            # update the count of samples for that class
             sample_per_class_count[target] += 1
 
 
@@ -832,10 +836,10 @@ def classify_test_set(model, test_loader, assignments, verbose = 1):
 
         # forward pass
         model.eval()
-        f = model.forward_test(data_it)
+        f = model.forward_test(data_it)  # batch_size x n_neurons
 
         # highest response neurons
-        highest = f.argmax(axis=1)
+        highest = f.argmax(axis=1)  # I should implement a population coding
 
         # convert the index of the neurons in the assigned classes
         prediction = [assignments[i] for i in highest]
@@ -855,6 +859,7 @@ def classify_test_set(model, test_loader, assignments, verbose = 1):
 #     HYPERPARAMETERS OPTIMIZATION       #
 #                                        #
 ##########################################
+
 
 
 def define_model(trial):
@@ -899,6 +904,8 @@ def define_model(trial):
 
     return model
 
+
+
 def objective(trial):
     # use cuda if available
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
@@ -911,17 +918,17 @@ def objective(trial):
     num_steps = trial.suggest_int("num_steps", 50, 350, step = 50)
     gain = 1.
     mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, train=True, my_seed = 42)
-    subset_loader = mnist_train.get_subset(100)
+    sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 50)
 
     # train the model
     num_epochs = 3
     with torch.no_grad():
         for epochs in range(num_epochs):
             start_time = time.time()
-            with tqdm(total=len(subset_loader), unit='batch', ncols=120) as pbar:
+            with tqdm(total=len(sub_train), unit='batch', ncols=120) as pbar:
 
                 # Iterate through minibatches
-                for index, (data_it, _) in enumerate(subset_loader):
+                for index, (data_it, _) in enumerate(sub_train):
 
                     # forward pass
                     model.forward(data_it)
@@ -935,10 +942,10 @@ def objective(trial):
                     pbar.update(1)
 
                 # assign the label to the neurons
-                temp_assignments = assign_neurons_to_classes(model, subset_loader, verbose = 0 )
+                temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
 
                 # compute the accuracy so far
-                accuracy = classify_test_set(model, subset_loader, temp_assignments, verbose = 0)
+                accuracy = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
 
                 # update the progress bar
                 pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
@@ -949,6 +956,84 @@ def objective(trial):
                 # handle pruning
                 if trial.should_prune():
                     raise optuna.exceptions.TrialPruned()
+
+    return accuracy
+
+
+
+def objective_2(trial):
+
+    # use cuda if available
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+
+    # define the model
+    pars = mnist_pars(
+        weight_initialization_type = 'clamp',
+        STDP_type = 'classic',
+        A_minus = 0.0003,
+        A_plus = 0.0002,
+        beta_minus = 0.63,
+        beta_plus = 0.35,
+        reset_mechanism = 'subtract',
+        alpha = 0.99,
+        beta = 0.68,
+        dynamic_threshold = True,
+        refractory_period = False,
+        lateral_inhibition = True,
+        lateral_inhibition_strength = 0.8,
+        min_spk_number = 5,
+        t = 10
+    )
+
+    # define the model
+    input_size = 28*28
+    n_neurons = trial.suggest_int("n_neurons", 224, 1024, step = 32)
+    model = snn_mnist(pars, input_size, n_neurons).to(device)
+
+    batch_size = trial.suggest_categorical("batch_size", [200, 300, 400])
+    num_steps = trial.suggest_int("num_steps", 300, 500, step = 50)
+    gain = trial.suggest_float("gain", 1.0, 10.0, log=True)
+    min_rate = trial.suggest_float("min_rate", 0.0, 0.5, step = 0.1)
+    mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42)
+    sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 50)
+
+    # train the model
+    num_epochs = 10
+    with torch.no_grad():
+        for epochs in range(num_epochs):
+            start_time = time.time()
+            with tqdm(total=len(sub_train), unit='batch', ncols=120) as pbar:
+
+                # Iterate through minibatches
+                for data_it, _ in sub_train:
+
+                    # forward pass
+                    model.forward(data_it)
+
+                    # check that all the neurons have emitted at least min_spk_number spikes
+                    flag = np.min(model.get_records()['spk'].numpy().sum(axis = 0)) < model.pars['min_spk_number']
+                    if flag:
+                        print(f"Some batch have not reached the minimum number of spikes with gain {gain} and min rate {min_rate}")
+
+                    # Update progress bar
+                    pbar.update(1)
+
+                # assign the label to the neurons
+                temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
+
+                # compute the accuracy so far
+                accuracy = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
+
+                # update the progress bar
+                pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
+
+                # report the accuracy
+                trial.report(accuracy, epochs)
+
+                # handle pruning
+                if trial.should_prune():
+                    raise optuna.exceptions.TrialPruned()
+    
 
     return accuracy
 
