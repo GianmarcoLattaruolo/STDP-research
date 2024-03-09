@@ -59,7 +59,8 @@ def mnist_pars(**kwargs):  #DA SISTEMARE
     pars['min_spk_number'] = 5                        # minimum number of spikes for a forward pass of a batch
     pars['store_records'] = True                      # store the records of the simulation
     pars['store_subsampling_factor'] = 10             # subsampling factor in time steps for storing the records 
-    pars['weight_initialization_type'] = 'clamp'     # type of weight initialization (still in development)
+    pars['weight_initialization_type'] = 'clamp'      # type of weight initialization (still in development)
+    pars['assignment_confidence'] = 0                 # < of the difference between the max and the second max for the assignment of the label
 
     # typical neuron parameters
     pars['threshold'] = 1.0                           # spike threshold for the LIF neuron
@@ -83,9 +84,9 @@ def mnist_pars(**kwargs):  #DA SISTEMARE
     pars['beta_plus'] = 0.9                           # decay factor for the post-synaptic trace
     pars['w_min'] = 0.0                               # minimum weight
     pars['w_max'] = 1.0                               # maximum weight
-    pars['A_minus'] = 0.00011                         # magnitude of LTD if STDP_type is 'classic'
+    pars['A_minus'] = 0.0002                         # magnitude of LTD if STDP_type is 'classic'
     pars['A_plus'] = 0.0001                           # magnitude of LTP if STDP_type is 'classic'
-    pars['STDP_offset'] = 0.4                         # offset for the STDP rule if STDP_type is 'offset'
+    pars['STDP_offset'] = 0.005                         # offset for the STDP rule if STDP_type is 'offset'
     pars['mu_exponent'] = 2                           # exponent for the dynamic weight constraint if STDP_type is 'offset'
     pars['learning_rate'] = 0.0001                    # learning rate for the weights if STDP_type is 'offset  
 

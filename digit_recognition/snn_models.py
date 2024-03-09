@@ -113,6 +113,10 @@ class snn_mnist(nn.Module):
             W = self.fc.weight.data
             W = W - W.min() + 0.001
             return W
+        elif self.pars['weight_initialization_type'] == 'random':
+            return torch.rand_like(self.fc.weight.data)*(self.w_max - self.w_min) + self.w_min
+        else:
+            raise NotImplementedError("Only clamp, shift and random weight initialization are implemented")
 
 
     def get_records(self):
@@ -810,20 +814,30 @@ def assign_neurons_to_classes(model, val_loader, verbose = 1):
 
     # devide each row by the number of samples
     rate_matrix = rate_matrix.T / sample_per_class_count
+
+    # compute the confidence of the assignment: 
+    #1 : sort the response rate of the neurons to each class
+    sort_rate = np.sort(rate_matrix , axis=1) 
+    #2 : check if the difference between the highest response and the second highest is significative
+    conf_status = np.diff(sort_rate, n=1)[:,-1] > model.pars.get('assignment_confidence',0)
+
+    # assign the neurons to the classes
     assignments = rate_matrix.argmax(axis=1)
+    # build the dataframe reporting if the neuron assignment is confident
+    df_assignments = pd.DataFrame([assignments,conf_status], index = ['assignments', 'conf_status']).T
 
     if verbose > 0:
-        df = pd.DataFrame(rate_matrix, index = [i for i in range(n_neurons)], columns = [i for i in range(num_classes)])
-        df = pd.concat([df,pd.DataFrame(sample_per_class_count).T])
-        df.index = df.index.tolist()[:-1] + ['sample_count']
-        df['max_index'] = df.idxmax(axis=1)
-        return assignments, df
+        df_rate = pd.DataFrame(rate_matrix, index = [i for i in range(n_neurons)], columns = [i for i in range(num_classes)])
+        df_rate = pd.concat([df_rate,pd.DataFrame(sample_per_class_count).T])
+        df_rate.index = df_rate.index.tolist()[:-1] + ['sample_count']
+        df_rate['max_index'] = df_rate.idxmax(axis=1)
+        return df_assignments, df_rate
     else:
-        return assignments
+        return df_assignments
 
 
 
-def classify_test_set(model, test_loader, assignments, verbose = 1):
+def classify_test_set(model, test_loader, df_assignments, verbose = 1):
     # use the assignments to classify the test set
 
     accuracy_record = 0
@@ -838,17 +852,33 @@ def classify_test_set(model, test_loader, assignments, verbose = 1):
         model.eval()
         f = model.forward_test(data_it)  # batch_size x n_neurons
 
-        # highest response neurons
-        highest = f.argmax(axis=1)  # I should implement a population coding
-
-        # convert the index of the neurons in the assigned classes
-        prediction = [assignments[i] for i in highest]
-
+        # Identify for each slice of the batch the first class assigned with confidence the the highest responsive neuron
+        #1 : sort the indexes of the rates array
+        sorted_response = np.argsort(f, axis=1)  # batch_size x n_neurons with indexes sorted accordingly to f 
+        #2 : initialize a prediction array with values not present in the classes (20)
+        prediction = np.ones(f.shape[0])*20
+        #3 : for each image in the batch find the first class assigned with confidence the the highest responsive neuron
+        for i in range(f.shape[0]):
+            #4 : for each neuron in the sorted_response array check if the assignment has been done with confidence
+            for go_to_previous_index in range(f.shape[1]):
+                #5 : identify the index of the neuron with the highest response
+                max_neuron_index = sorted_response[i,-1-go_to_previous_index]
+                #6 : check if the assignment has been done with confidence
+                if df_assignments.iloc[max_neuron_index]['conf_status']:
+                    prediction[i] = df_assignments['assignments'][max_neuron_index]
+                    break #  exit from the inner for loop if the assignment has been done with confidence
+                else:
+                    continue # go to the next neuron if the assignment has not been done with confidence
+            
+        # check that all the neurons have been assigned with confidence
+        if np.sum(prediction == 20) > 0:
+            raise ValueError(f"Not all the neurons have been assigned with confidence {model.pars.get('assignment_confidence',0)}")
+                
         # update the running accuracy
-        accuracy_record += np.sum(np.array(prediction) == targets_it.numpy())
+        accuracy_record += np.sum(prediction == targets_it.numpy())
             
     # display the accuracy
-    accuracy_record = accuracy_record / len(test_loader.dataset)
+    accuracy_record = accuracy_record / (len(test_loader)*test_loader.batch_size)
     
     return accuracy_record
 
@@ -860,7 +890,7 @@ def classify_test_set(model, test_loader, assignments, verbose = 1):
 #                                        #
 ##########################################
 
-
+# first search : time constants and learning rates
 
 def define_model(trial):
 
@@ -872,8 +902,8 @@ def define_model(trial):
         beta_plus = 0.0 # we don't need post synaptic traces if we use the offset STDP
     else:
         STDP_offset = 0.0
-        A_minus = trial.suggest_float("A_minus", 0.0001, 0.1, log = True)
-        A_plus = trial.suggest_float("A_plus", 0.0001, 0.1, log = True)
+        A_minus = trial.suggest_float("A_minus", 0.00001, 0.001, log = True )
+        A_plus = trial.suggest_float("A_minus", 0.00001, 0.001, log = True )
         beta_plus = trial.suggest_float("beta_plus", 0.1, 1.0 )
         learning_rate = 0.0 # we don't need learning rate if we use the classic STDP
 
@@ -886,20 +916,19 @@ def define_model(trial):
         beta_plus = beta_plus,
         STDP_offset = STDP_offset,
         learning_rate = learning_rate,
-        reset_mechanism = trial.suggest_categorical("reset_mechanism", ['subtract', 'zero']),
         alpha = trial.suggest_float("alpha", 0.1, 1.0 ),
         beta = trial.suggest_float("beta", 0.1, 1.0 ),
         dynamic_threshold = True,
-        refractory_period = False,
+        tau_theta = trial.suggest_float("tau_theta", 10, 1000, log = True),
+        theta_add = trial.suggest_float("theta_add", 0.2, 2.0, step = 0.2),
         lateral_inhibition = True,
         lateral_inhibition_strength = trial.suggest_float("inhi_strength", 0.01, 10.0, log = True),
-        min_spk_number = 5,
-        t = 10
+        store_records = False,
     )
 
     # define the model
     input_size = 28*28
-    n_neurons = trial.suggest_int("n_neurons", 16, 256, step = 16)
+    n_neurons = 100
     model = snn_mnist(pars, input_size, n_neurons)
 
     return model
@@ -914,8 +943,8 @@ def objective(trial):
     model = define_model(trial).to(device)
 
     # define the data loader
-    batch_size = trial.suggest_categorical("batch_size", [30,60,100,200])
-    num_steps = trial.suggest_int("num_steps", 50, 350, step = 50)
+    batch_size = 100
+    num_steps = 100
     gain = 1.
     mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, train=True, my_seed = 42)
     sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 50)
@@ -960,6 +989,7 @@ def objective(trial):
     return accuracy
 
 
+# second search : number of neurons, batch size, num_steps, gain, min_rate
 
 def objective_2(trial):
 
@@ -987,15 +1017,15 @@ def objective_2(trial):
 
     # define the model
     input_size = 28*28
-    n_neurons = trial.suggest_int("n_neurons", 224, 1024, step = 32)
+    n_neurons = trial.suggest_int("n_neurons", 128, 1024, step = 64)
     model = snn_mnist(pars, input_size, n_neurons).to(device)
 
-    batch_size = trial.suggest_categorical("batch_size", [200, 300, 400])
-    num_steps = trial.suggest_int("num_steps", 300, 500, step = 50)
-    gain = trial.suggest_float("gain", 1.0, 10.0, log=True)
+    batch_size = trial.suggest_categorical("batch_size", [50, 100, 200, 400]) #  the val and test are just 400 samples
+    num_steps = trial.suggest_int("num_steps", 200, 500, step = 50)
+    gain = trial.suggest_float("gain", 0.9, 20.0, log=True)
     min_rate = trial.suggest_float("min_rate", 0.0, 0.5, step = 0.1)
     mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42)
-    sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 50)
+    sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 25)
 
     # train the model
     num_epochs = 10
