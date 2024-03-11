@@ -60,7 +60,7 @@ def mnist_pars(**kwargs):  #DA SISTEMARE
     pars['store_records'] = True                      # store the records of the simulation
     pars['store_subsampling_factor'] = 10             # subsampling factor in time steps for storing the records 
     pars['weight_initialization_type'] = 'clamp'      # type of weight initialization (still in development)
-    pars['assignment_confidence'] = 0                 # < of the difference between the max and the second max for the assignment of the label
+    pars['assignment_confidence'] = 0.01              # < of the difference between the max and the second max for the assignment of the label
 
     # typical neuron parameters
     pars['threshold'] = 1.0                           # spike threshold for the LIF neuron

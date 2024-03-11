@@ -31,6 +31,8 @@ device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 
 # optimization libraries
 import optuna
+from optuna.study import MaxTrialsCallback
+from optuna.trial import TrialState
 
 
 #import from my scripts
@@ -113,10 +115,13 @@ class snn_mnist(nn.Module):
             W = self.fc.weight.data
             W = W - W.min() + 0.001
             return W
-        elif self.pars['weight_initialization_type'] == 'random':
-            return torch.rand_like(self.fc.weight.data)*(self.w_max - self.w_min) + self.w_min
+        elif self.pars['weight_initialization_type'] == 'norm_column':
+            W =  torch.rand_like(self.fc.weight.data)*(self.w_max - self.w_min) + self.w_min
+            # normalize the weights rows to 1
+            W = W / W.sum(axis=1).reshape(-1,1)
+            return W
         else:
-            raise NotImplementedError("Only clamp, shift and random weight initialization are implemented")
+            raise NotImplementedError("Only clamp, shift and norm_column weight initialization are implemented")
 
 
     def get_records(self):
@@ -455,11 +460,11 @@ class snn_mnist(nn.Module):
                 A_plus, A_minus = self.pars['A_plus'], self.pars['A_minus']
 
                 # reshape spike and traces to allow the outer product
-                LTP = A_plus * torch.tensordot(spk.T, pre_syn_traces, dims=1) 
-                LTD = A_minus * torch.tensordot(post_syn_traces.T, pre_train, dims=1)
+                LTP = torch.tensordot(spk.T, pre_syn_traces, dims=1) / self.batch_size
+                LTD = torch.tensordot(post_syn_traces.T, pre_train, dims=1) / self.batch_size
 
                 # update the weights
-                W = self.fc.weight.data + LTP - LTD
+                W = self.fc.weight.data  + A_plus * LTP  - A_minus *  LTD
                 W = torch.clamp(W, min=self.w_min, max=self.w_max)
             
         elif self.pars['STDP_type'] == 'offset':
@@ -472,8 +477,27 @@ class snn_mnist(nn.Module):
                 dynamic_weights_constrain = (self.w_max - self.fc.weight.data)**self.pars['mu_exponent']
                 dW = self.pars['learning_rate'] * thresholded_pre_traces.mean(axis=0) * dynamic_weights_constrain
                 W = self.fc.weight.data + dW
+
+        elif self.pars['STDP_type'] == 'classic_asymptotic':
+
+            # check if there are no spikes
+            if torch.sum(spk) == 0 and torch.sum(pre_train) == 0:
+                W = self.fc.weight.data
+            else:
+
+                # compute LTP and LTD
+                A_plus, A_minus = self.pars['A_plus'], self.pars['A_minus']
+
+                # reshape spike and traces to allow the outer product
+                LTP = torch.tensordot(spk.T, pre_syn_traces, dims=1) / self.batch_size
+                LTD = torch.tensordot(post_syn_traces.T, pre_train, dims=1) / self.batch_size
+
+                # update the weights
+                W = self.fc.weight.data 
+                W = W + A_plus * LTP * (self.w_max - W)**2 - A_minus *  LTD * (W - self.w_min)**2
+                #W = torch.clamp(W, min=self.w_min, max=self.w_max)
         else:
-            raise NotImplementedError("Only classic and paper5 STDP is implemented")
+            raise NotImplementedError("Only classic, offset and classic_asymptotic STDP are implemented")
         
         # store the weights
         self.fc.weight.data = W
@@ -505,7 +529,7 @@ class snn_mnist(nn.Module):
             syn, mem  = self.lif.init_synaptic()
 
             # matrix of zeros for the rates
-            rates = torch.zeros((self.batch_size, self.n_neurons))
+            num_spk = torch.zeros((self.batch_size, self.n_neurons))
 
             # reinitialize the refractory period
             if self.pars['refractory_period']:
@@ -529,7 +553,7 @@ class snn_mnist(nn.Module):
                 spk, syn, mem = self.lif(pre_train, syn, mem)
 
                 # add the new spikes
-                rates += spk
+                num_spk += spk
 
                 # check if some neurons are in refractory time 
                 if self.pars['refractory_period']:
@@ -542,12 +566,8 @@ class snn_mnist(nn.Module):
                 # eventually update the threshold
                 if self.pars['dynamic_threshold']:
                     self.lif.threshold = self.dynamic_threshold(spk, store = False)
-
-            # compute the firing rates from the number of spikes
-            rates = rates / image.shape[0]
-            rates = rates.detach().numpy()
         
-        return rates
+        return num_spk.detach().numpy()
 
 
     # plot the simulation records, still in development
@@ -721,38 +741,35 @@ def train_model(model, train_loader, val_loader = None, num_epochs = 1, val_accu
     
     if val_accuracy_record and val_loader is None:
         raise ValueError("If val_accuracy_record is set to True, val_loader must be provided")
+    
+    # retrive the minimum number of spikes to be emitted at each forward pass
+    min_spk_number = model.pars['min_spk_number']
+    record_spk = []
 
+    # train the model
     with torch.no_grad():
         for epochs in range(num_epochs):
             # Iterate through minibatches
             start_time = time.time()
-            with tqdm(total=len(train_loader), unit='batch', ncols=120) as pbar:
+            with tqdm(total=len(train_loader), unit='batch', ncols=120+40*val_accuracy_record) as pbar:
 
-                for index, (data_it, targets_it) in enumerate(train_loader):
-                    flag = True
-                    iter_flag = 0
+                for data_it, _ in train_loader:
 
-                    # store the weights momentanearly
-                    W = model.fc.weight.data.clone()
+                    # forward pass
+                    model.eval()
+                    model.forward(data_it)
+                    
+                    # check that all the neurons have emitted at least min_spk_number spikes
+                    spk_emitted = torch.stack(model.neuron_records['spk']) + 0. # shape (num_steps , batch_size, n_neurons)
+                    flag = np.min(spk_emitted.numpy().sum(axis = 0)) < min_spk_number
+                    if flag:
+                        anspnpi = spk_emitted.numpy().sum(axis = 0).mean()
+                        raise ValueError(f"One Neuron have not emitted at least {min_spk_number} spikes, anspnpi {anspnpi:.2e}")
+                    else:
+                        # reset just the spk records
+                        model.neuron_records['spk'] = []
+                        record_spk.append(spk_emitted)
 
-                    while flag and iter_flag < 10:
-                        
-                        # reset the original weights
-                        model.fc.weight.data = W
-
-                        # generate spike data
-                        data_it = data_it + torch.ones_like(data_it) * 0.05 * iter_flag
-
-                        
-                        # forward pass
-                        model.eval()
-                        model.forward(data_it)
-                        min_spk_number = model.pars['min_spk_number']
-                        # check that all the neurons have emitted at least min_spk_number spikes
-                        flag = np.min(model.get_records()['spk'].numpy().sum(axis = 0)) < min_spk_number
-                        iter_flag += 1
-                        if not model.pars['use_min_spk_number']:
-                            flag = False
 
                     # Update progress bar
                     pbar.update(1) 
@@ -761,13 +778,15 @@ def train_model(model, train_loader, val_loader = None, num_epochs = 1, val_accu
                     # assign the label to the neurons
                     temp_assignments = assign_neurons_to_classes(model, val_loader, verbose = 0 )
 
-                    # compute the accuracy so far
-                    accuracy = classify_test_set(model, val_loader, temp_assignments, verbose = 0)
+                    # compute the accuracy so far (anspni = average number of spikes per neuron per image)
+                    accuracy, anspnpi = classify_test_set(model, val_loader, temp_assignments, verbose = 0)
 
                     # update the progress bar
-                    pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
+                    pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s', ANSPNPI = f'{anspnpi:.2e}')
                 else:
                     pbar.set_postfix( time=f'{time.time() - start_time:.2f}s')
+        
+        model.neuron_records['spk'] = record_spk
 
     return model
 
@@ -790,44 +809,43 @@ def assign_neurons_to_classes(model, val_loader, verbose = 1):
     num_classes = 10
     n_neurons = model.n_neurons
 
-    rate_matrix = np.zeros((num_classes, n_neurons))
+    spk_matrix = np.zeros((num_classes, n_neurons))
     sample_per_class_count = np.zeros(num_classes)
 
-    start_time = time.time()
-    for index, (data_it, targets_it) in enumerate(val_loader):
+    for data_it, targets_it in val_loader:
 
-        if (index +1) % 25 == 0 and verbose > 0:
-            print(f"Processing batch {index+1}/{len(val_loader)} --- {(time.time() - start_time):.2f} seconds ---")
+        # retrive the number of steps
+        num_steps = data_it.shape[0]
         
         # forward pass
         model.eval()
-        f = model.forward_test(data_it)  # numpy array of shape (batch_size x n_neurons)
+        num_spk = model.forward_test(data_it)  # numpy array of shape (batch_size x n_neurons)
 
-        for f_index,target in enumerate(targets_it.tolist()):  
+        for num_spk_index,target in enumerate(targets_it.tolist()):  
 
             # in the row corresponding to the target add the firing rate of the neurons in response to that target
-            rate_matrix[target] += f[f_index] 
+            spk_matrix[target] += num_spk[num_spk_index] 
 
             # update the count of samples for that class
             sample_per_class_count[target] += 1
 
 
     # devide each row by the number of samples
-    rate_matrix = rate_matrix.T / sample_per_class_count
+    spk_matrix = spk_matrix.T / sample_per_class_count
 
     # compute the confidence of the assignment: 
     #1 : sort the response rate of the neurons to each class
-    sort_rate = np.sort(rate_matrix , axis=1) 
+    sort_rate = np.sort(spk_matrix , axis=1) 
     #2 : check if the difference between the highest response and the second highest is significative
     conf_status = np.diff(sort_rate, n=1)[:,-1] > model.pars.get('assignment_confidence',0)
 
     # assign the neurons to the classes
-    assignments = rate_matrix.argmax(axis=1)
+    assignments = spk_matrix.argmax(axis=1)
     # build the dataframe reporting if the neuron assignment is confident
     df_assignments = pd.DataFrame([assignments,conf_status], index = ['assignments', 'conf_status']).T
 
     if verbose > 0:
-        df_rate = pd.DataFrame(rate_matrix, index = [i for i in range(n_neurons)], columns = [i for i in range(num_classes)])
+        df_rate = pd.DataFrame(spk_matrix/num_steps, index = [i for i in range(n_neurons)], columns = [i for i in range(num_classes)])
         df_rate = pd.concat([df_rate,pd.DataFrame(sample_per_class_count).T])
         df_rate.index = df_rate.index.tolist()[:-1] + ['sample_count']
         df_rate['max_index'] = df_rate.idxmax(axis=1)
@@ -841,6 +859,7 @@ def classify_test_set(model, test_loader, df_assignments, verbose = 1):
     # use the assignments to classify the test set
 
     accuracy_record = 0
+    tot_num_spk = 0
 
     start_time = time.time()
     for index, (data_it, targets_it) in enumerate(test_loader):
@@ -850,17 +869,25 @@ def classify_test_set(model, test_loader, df_assignments, verbose = 1):
 
         # forward pass
         model.eval()
-        f = model.forward_test(data_it)  # batch_size x n_neurons
+        num_spk = model.forward_test(data_it)  # out shape : batch_size x n_neurons
+        tot_num_spk += num_spk.sum()
 
-        # Identify for each slice of the batch the first class assigned with confidence the the highest responsive neuron
+        # # identify for each image in the batch the highest response neuron assigned with confidence
+        # confidences = list(df_assignments['conf_status'].values)
+        # f_conf = f[:,confidences]
+        # max_index = np.argmax(f_conf,axis=1)
+        # prediction2 = df_assignments['assignments'][confidences][max_index]
+
+
+        # Identify for each slice of the batch the first class assigned with confidence to the highest responsive neuron
         #1 : sort the indexes of the rates array
-        sorted_response = np.argsort(f, axis=1)  # batch_size x n_neurons with indexes sorted accordingly to f 
+        sorted_response = np.argsort(num_spk, axis=1)  # batch_size x n_neurons with indexes sorted accordingly to f 
         #2 : initialize a prediction array with values not present in the classes (20)
-        prediction = np.ones(f.shape[0])*20
+        prediction = np.ones(num_spk.shape[0])*20
         #3 : for each image in the batch find the first class assigned with confidence the the highest responsive neuron
-        for i in range(f.shape[0]):
+        for i in range(num_spk.shape[0]):
             #4 : for each neuron in the sorted_response array check if the assignment has been done with confidence
-            for go_to_previous_index in range(f.shape[1]):
+            for go_to_previous_index in range(num_spk.shape[1]):
                 #5 : identify the index of the neuron with the highest response
                 max_neuron_index = sorted_response[i,-1-go_to_previous_index]
                 #6 : check if the assignment has been done with confidence
@@ -869,19 +896,24 @@ def classify_test_set(model, test_loader, df_assignments, verbose = 1):
                     break #  exit from the inner for loop if the assignment has been done with confidence
                 else:
                     continue # go to the next neuron if the assignment has not been done with confidence
-            
+        
+        # # test if the two method are equals
+        # if np.sum(prediction2 != prediction) > 0:
+        #     print("The two methods to assign the neurons to the classes are not equals")
+
         # check that all the neurons have been assigned with confidence
         if np.sum(prediction == 20) > 0:
-            raise ValueError(f"Not all the neurons have been assigned with confidence {model.pars.get('assignment_confidence',0)}")
+            #print(f"Not all the neurons have been classified with confidence > {model.pars.get('assignment_confidence',0)}")
+            pass
                 
         # update the running accuracy
         accuracy_record += np.sum(prediction == targets_it.numpy())
             
     # display the accuracy
     accuracy_record = accuracy_record / (len(test_loader)*test_loader.batch_size)
+    averaged_num_spk_per_neuron_per_image = tot_num_spk / (model.n_neurons * len(test_loader)*test_loader.batch_size)
     
-    return accuracy_record
-
+    return accuracy_record, averaged_num_spk_per_neuron_per_image
 
 
 ##########################################
@@ -897,13 +929,13 @@ def define_model(trial):
     STDP_type = trial.suggest_categorical('STDP_type', ['classic', 'offset'])
     if STDP_type == 'offset':
         STDP_offset = trial.suggest_float("STDP_offset", 0.0001, 0.1, log = True)
-        learning_rate = trial.suggest_float("learning_rate", 0.0001, 0.1, log = True)
+        learning_rate = trial.suggest_float("learn_rate", 0.0001, 0.1, log = True)
         A_minus, A_plus = 0.0, 0.0
         beta_plus = 0.0 # we don't need post synaptic traces if we use the offset STDP
     else:
         STDP_offset = 0.0
-        A_minus = trial.suggest_float("A_minus", 0.00001, 0.001, log = True )
-        A_plus = trial.suggest_float("A_minus", 0.00001, 0.001, log = True )
+        A_minus = trial.suggest_float("A_minus", 0.00005, 0.001, log = True )
+        A_plus = trial.suggest_float("A_plus", 0.00005, 0.001, log = True )
         beta_plus = trial.suggest_float("beta_plus", 0.1, 1.0 )
         learning_rate = 0.0 # we don't need learning rate if we use the classic STDP
 
@@ -924,18 +956,21 @@ def define_model(trial):
         lateral_inhibition = True,
         lateral_inhibition_strength = trial.suggest_float("inhi_strength", 0.01, 10.0, log = True),
         store_records = False,
+        assignment_confidence = trial.suggest_float('ass_conf', 0.0, 0.01, step = 0.001)    
     )
 
     # define the model
     input_size = 28*28
     n_neurons = 100
     model = snn_mnist(pars, input_size, n_neurons)
-
+    trial.set_user_attr('weight_initialization_type','clamp')
     return model
 
 
 
 def objective(trial):
+    # in this objective there are 13 hyperparameters to optimize 
+
     # use cuda if available
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
 
@@ -944,9 +979,10 @@ def objective(trial):
 
     # define the data loader
     batch_size = 100
-    num_steps = 100
+    num_steps = 200
     gain = 1.
-    mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, train=True, my_seed = 42)
+    min_rate = 0.005
+    mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42)
     sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 50)
 
     # train the model
@@ -957,15 +993,10 @@ def objective(trial):
             with tqdm(total=len(sub_train), unit='batch', ncols=120) as pbar:
 
                 # Iterate through minibatches
-                for index, (data_it, _) in enumerate(sub_train):
+                for data_it, _ in sub_train:
 
                     # forward pass
                     model.forward(data_it)
-
-                    # check that all the neurons have emitted at least min_spk_number spikes
-                    flag = np.min(model.get_records()['spk'].numpy().sum(axis = 0)) < model.pars['min_spk_number']
-                    if flag:
-                        print(f"Epoch {epochs} - Batch {index} - Neurons have not reached the minimum number of spikes")
 
                     # Update progress bar
                     pbar.update(1)
@@ -974,17 +1005,22 @@ def objective(trial):
                 temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
 
                 # compute the accuracy so far
-                accuracy = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
+                accuracy, mean_rate = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
 
                 # update the progress bar
-                pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
+                pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s', rate = f'{mean_rate:.2e}')
 
                 # report the accuracy
                 trial.report(accuracy, epochs)
 
                 # handle pruning
-                if trial.should_prune():
+                if trial.should_prune() or mean_rate < 0.00001:
                     raise optuna.exceptions.TrialPruned()
+        
+        # set a user attribute to keep tracks of other statistics of the model trained
+        trial.set_user_attr('mean_rate',mean_rate)
+        trial.set_user_attr('assign_mean_conf',np.mean(temp_assignments['conf_status']+0.0))
+
 
     return accuracy
 
@@ -992,27 +1028,30 @@ def objective(trial):
 # second search : number of neurons, batch size, num_steps, gain, min_rate
 
 def objective_2(trial):
+    # in this objective there 5 hyperparameters to optimize
 
     # use cuda if available
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
 
     # define the model
     pars = mnist_pars(
-        weight_initialization_type = 'clamp',
+        weight_initialization_type = 'shift',
         STDP_type = 'classic',
-        A_minus = 0.0003,
-        A_plus = 0.0002,
-        beta_minus = 0.63,
-        beta_plus = 0.35,
+        A_minus = 0.0007,
+        A_plus = 0.0006,
+        beta_minus = 0.85,
+        beta_plus = 0.45,
         reset_mechanism = 'subtract',
-        alpha = 0.99,
-        beta = 0.68,
+        alpha = 0.95,
+        beta = 0.8,
         dynamic_threshold = True,
+        tau_theta = 12,
+        theta_add = 2.0, # maybe greater
         refractory_period = False,
         lateral_inhibition = True,
-        lateral_inhibition_strength = 0.8,
-        min_spk_number = 5,
-        t = 10
+        lateral_inhibition_strength = 1.3,
+        store_records = False,
+        assignment_confidence = 0.0,
     )
 
     # define the model
@@ -1023,11 +1062,12 @@ def objective_2(trial):
     batch_size = trial.suggest_categorical("batch_size", [50, 100, 200, 400]) #  the val and test are just 400 samples
     num_steps = trial.suggest_int("num_steps", 200, 500, step = 50)
     gain = trial.suggest_float("gain", 0.9, 20.0, log=True)
-    min_rate = trial.suggest_float("min_rate", 0.0, 0.5, step = 0.1)
+    min_rate = trial.suggest_float("min_rate", 0.0, 0.5, step = 0.05)
     mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42)
     sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 25)
 
     # train the model
+    min_spk_number = model.pars['min_spk_number'] * batch_size
     num_epochs = 10
     with torch.no_grad():
         for epochs in range(num_epochs):
@@ -1040,10 +1080,9 @@ def objective_2(trial):
                     # forward pass
                     model.forward(data_it)
 
-                    # check that all the neurons have emitted at least min_spk_number spikes
-                    flag = np.min(model.get_records()['spk'].numpy().sum(axis = 0)) < model.pars['min_spk_number']
-                    if flag:
-                        print(f"Some batch have not reached the minimum number of spikes with gain {gain} and min rate {min_rate}")
+                    # check the min spk number
+                    flag = torch.stack(model.neuron_records['spk']).detach().numpy().sum() < min_spk_number
+                    trial.set_user_attr('min_spk_n_reached', not flag)
 
                     # Update progress bar
                     pbar.update(1)
@@ -1052,7 +1091,7 @@ def objective_2(trial):
                 temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
 
                 # compute the accuracy so far
-                accuracy = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
+                accuracy, mean_rate = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
 
                 # update the progress bar
                 pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
@@ -1064,11 +1103,92 @@ def objective_2(trial):
                 if trial.should_prune():
                     raise optuna.exceptions.TrialPruned()
     
-
+        #trial.set_user_attr('weight_initialization_type','clamp')
+        trial.set_user_attr('mean_rate', mean_rate)
+        #trial.set_user_attr('assign_mean_conf',np.mean(temp_assignments['conf_status']+0.0))
     return accuracy
 
     
-    
+# third search : STDP_classic_asymptotic
+
+def objective_3(trial):
+     # in this objective there 5 hyperparameters to optimize
+
+    # use cuda if available
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+
+    # define the model
+    pars = mnist_pars(
+        weight_initialization_type = 'shift',
+        STDP_type = 'classic',
+        A_minus = trial.suggest_float("A_minus", 0.0001, 0.1, log = True ),
+        w_min = 0.01,
+        A_plus = trial.suggest_float("A_plus", 0.0001, 0.1, log = True ),
+        beta_minus = 0.85,
+        beta_plus = 0.45,
+        reset_mechanism = 'subtract',
+        alpha = 0.95,
+        beta = 0.8,
+        dynamic_threshold = True,
+        tau_theta = 12,
+        theta_add = trial.suggest_float("theta_add", 0.5, 5.0, step = 0.5),
+        refractory_period = False,
+        lateral_inhibition = True,
+        lateral_inhibition_strength = trial.suggest_float("inhi_strength", 0.1, 10.0, log = True),
+        store_records = False,
+        assignment_confidence = 0.0,
+    )
+
+    # define the model
+    input_size = 28*28
+    n_neurons = trial.suggest_int("n_neurons", 128, 1024, step = 64)
+    model = snn_mnist(pars, input_size, n_neurons).to(device)
+
+    batch_size = 400 #  the val and test are just 400 samples
+    num_steps = trial.suggest_int("num_steps", 200, 500, step = 50)
+    gain = trial.suggest_float("gain", 0.9, 20.0, log=True)
+    min_rate = trial.suggest_float("min_rate", 0.0, 0.5, step = 0.05)
+    mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42)
+    sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 25)
+
+    # train the model
+    num_epochs = 5
+    with torch.no_grad():
+        for epochs in range(num_epochs):
+            start_time = time.time()
+            with tqdm(total=len(sub_train), unit='batch', ncols=120) as pbar:
+
+                # Iterate through minibatches
+                for data_it, _ in sub_train:
+
+                    # forward pass
+                    model.forward(data_it)
+
+                    # Update progress bar
+                    pbar.update(1)
+
+                # assign the label to the neurons
+                temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
+
+                # compute the accuracy so far
+                accuracy, mean_rate = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
+
+                # update the progress bar
+                pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
+
+                # report the accuracy
+                trial.report(accuracy, epochs)
+
+                # handle pruning
+                if trial.should_prune() or model.fc.weight.data.mean() == 0.0:
+                    raise optuna.exceptions.TrialPruned()
+                
+        trial.set_user_attr('mean weights', model.fc.weight.data.detach().numpy().mean(dtype=np.float64))
+        #trial.set_user_attr('weight_initialization_type','clamp')
+        trial.set_user_attr('mean_rate', mean_rate)
+        #trial.set_user_attr('assign_mean_conf',np.mean(temp_assignments['conf_status']+0.0))
+
+    return accuracy
 
 
 
