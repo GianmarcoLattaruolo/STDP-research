@@ -364,6 +364,11 @@ def snn_hpo_function(
         'beta_plus' : 0.25,                         # decay factor for the post-synaptic trace
 
     }
+
+    # define a function for the STDP parameters depending on the type
+    def STDP_params(STDP_type, trial):
+
+        return stdp_params
     # 1. Execute a grid search for each STDP type
 
     STDP_types = ['classic', 'offset', 'asymptotic']
@@ -387,15 +392,15 @@ def snn_hpo_function(
         # define the objective:
         def objective_rate(trial):
             # define the dataset and get the loader
-            batch_size = ...
-            num_steps = ...
-            gain = ...
-            min_rate = ...
+            batch_size = 200 # it should not influence the rate
+            num_steps = 100 # fixed it does not influence the rate
+            gain = trial.suggest_float("gain", 0.9, 20.0, log=True)
+            min_rate = trial.suggest_float("min_rate", 0.0, 0.5, step = 0.1)
             subset_loader = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42).get_subset(100)
             # define the model
             ...
             pars = mnist_pars(
-
+                **STDP_params(STDP, trial)
                 **fixed_params
             )
             n_neurons = ...
