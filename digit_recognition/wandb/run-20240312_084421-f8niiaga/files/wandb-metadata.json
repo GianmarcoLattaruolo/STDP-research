@@ -1,0 +1,44 @@
+{
+    "os": "Windows-10-10.0.22631-SP0",
+    "python": "3.11.5",
+    "heartbeatAt": "2024-03-12T07:44:22.891555",
+    "startedAt": "2024-03-12T07:44:21.679865",
+    "docker": null,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "<python with no main file>",
+    "codePathLocal": null,
+    "git": {
+        "remote": "https://github.com/GianmarcoLattaruolo/STDP-research.git",
+        "commit": "901d440987f1178019c537f47b6a880634fcc6e6"
+    },
+    "email": "lattaruologianmarco@gmail.com",
+    "root": "C:/Users/latta/GitHub/STDP-research",
+    "host": "LAPTOP-UKFPK90Q",
+    "username": "latta",
+    "executable": "c:\\Users\\latta\\miniconda3\\envs\\torch+\\python.exe",
+    "cpu_count": 4,
+    "cpu_count_logical": 8,
+    "cpu_freq": {
+        "current": 2803.0,
+        "min": 0.0,
+        "max": 2803.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 2803.0,
+            "min": 0.0,
+            "max": 2803.0
+        }
+    ],
+    "disk": {
+        "/": {
+            "total": 231.55175399780273,
+            "used": 75.8467025756836
+        }
+    },
+    "memory": {
+        "total": 31.72563934326172
+    }
+}

@@ -45,7 +45,6 @@ import importlib
 importlib.reload(importlib.import_module('snn_experiments'))
 importlib.reload(importlib.import_module('snn_plot_utils'))
 importlib.reload(importlib.import_module('snn_datasets'))
-importlib.reload(importlib.import_module('snn_hpo'))
 
 
 global mnist_pars
@@ -53,7 +52,7 @@ global rate_encoded_mnist
 from snn_experiments import *
 from snn_plot_utils import *
 from snn_datasets import *
-from snn_hpo import *
+
 
 
 
@@ -498,7 +497,8 @@ class snn_mnist(nn.Module):
 
                 # update the weights
                 W = self.fc.weight.data 
-                W = W + A_plus * LTP * (self.w_max - W)**2 - A_minus *  LTD * (W - self.w_min)**2
+                exponent = self.pars['mu_exponent']
+                W = W + A_plus * LTP * (self.w_max - W)**exponent - A_minus *  LTD * (W - self.w_min)**exponent
                 #W = torch.clamp(W, min=self.w_min, max=self.w_max)
         else:
             raise NotImplementedError("Only classic, offset and asymptotic STDP are implemented")

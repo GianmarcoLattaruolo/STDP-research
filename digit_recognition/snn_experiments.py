@@ -54,40 +54,40 @@ def mnist_pars(**kwargs):  #DA SISTEMARE
     pars = {}
     
     # simulation parameters
-    pars['dt'] = 1.                                   # simulation time step [ms]  
-    pars['use_min_spk_number'] = False                # use the minimum number of spikes for a forward pass of a batch
-    pars['min_spk_number'] = 5                        # minimum number of spikes for a forward pass of a batch
-    pars['store_records'] = True                      # store the records of the simulation
-    pars['store_subsampling_factor'] = 10             # subsampling factor in time steps for storing the records 
+    pars['dt'] = 1.                                   # (FIXED) simulation time step [ms]  
+    pars['use_min_spk_number'] = False                # (FIXED) use the minimum number of spikes for a forward pass of a batch
+    pars['min_spk_number'] = 5                        # (FIXED) minimum number of spikes for a forward pass of a batch
+    pars['store_records'] = True                      # (FIXED) store the records of the simulation
+    pars['store_subsampling_factor'] = 10             # (FIXED) subsampling factor in time steps for storing the records 
     pars['weight_initialization_type'] = 'clamp'      # type of weight initialization (still in development)
     pars['assignment_confidence'] = 0.01              # < of the difference between the max and the second max for the assignment of the label
 
     # typical neuron parameters
-    pars['threshold'] = 1.0                           # spike threshold for the LIF neuron
-    pars['alpha'] = 0.9                               # decaying factore for the neuron conductance
-    pars['beta'] = 0.8                                # decaying factor for the neuron potential
-    pars['reset_mechanism'] = 'subtract'              # reset mechanism for the neuron potential
+    pars['threshold'] = 1.0                           # (FIXED) spike threshold for the LIF neuron
+    pars['alpha'] = 0.95                              # (FIXED) decaying factore for the neuron conductance
+    pars['beta'] = 0.8                                # (FIXED) decaying factor for the neuron potential
+    pars['reset_mechanism'] = 'subtract'              # (FIXED) reset mechanism for the neuron potential
     # parameters for dynamic threshold   
-    pars['dynamic_threshold'] = False                 # use a dynamic threshold for the neuron
-    pars['tau_theta'] = 1e7                           # time constant for the dynamic threshold
+    pars['dynamic_threshold'] = False                 # (FIXED) use a dynamic threshold for the neuron
+    pars['tau_theta'] = 20                            # (FIXED) time constant for the dynamic threshold
     pars['theta_add'] = 0.05                          # increment for the dynamic threshold in case of a spike
     # parameters for lateral inhibition
-    pars['lateral_inhibition'] = False                # use lateral inhibition
+    pars['lateral_inhibition'] = False                # (FIXED) use lateral inhibition
     pars['lateral_inhibition_strength'] = 0.1         # strength of the lateral inhibition 
     # parameters for refractory period 
-    pars['refractory_period'] = False                 # use refractory period
+    pars['refractory_period'] = False                 # (FIXED) use refractory period
     pars['ref_time'] = 2.                             # refractory time in time steps
 
     # STDP parameters
     pars['STDP_type'] = None                          # type of STDP rule
     pars['beta_minus'] = 0.9                          # decay factor for the pre-synaptic trace
     pars['beta_plus'] = 0.9                           # decay factor for the post-synaptic trace
-    pars['w_min'] = 0.0                               # minimum weight
-    pars['w_max'] = 1.0                               # maximum weight
-    pars['A_minus'] = 0.0002                         # magnitude of LTD if STDP_type is 'classic'
-    pars['A_plus'] = 0.0001                           # magnitude of LTP if STDP_type is 'classic'
-    pars['STDP_offset'] = 0.005                         # offset for the STDP rule if STDP_type is 'offset'
-    pars['mu_exponent'] = 2                           # exponent for the dynamic weight constraint if STDP_type is 'offset'
+    pars['w_min'] = 0.0                               # (FIXED) minimum weight
+    pars['w_max'] = 1.0                               # (FIXED) maximum weight
+    pars['A_minus'] = 0.0002                          # magnitude of LTD if STDP_type is 'classic' or 'asymptotic
+    pars['A_plus'] = 0.0001                           # magnitude of LTP if STDP_type is 'classic' or 'asymptotic
+    pars['STDP_offset'] = 0.005                       # offset for the STDP rule if STDP_type is 'offset'
+    pars['mu_exponent'] = 2                           # (FIXED) exponent for the dynamic weight constraint if STDP_type is 'offset'
     pars['learning_rate'] = 0.0001                    # learning rate for the weights if STDP_type is 'offset  
 
     # external parameters if any #
