@@ -1749,8 +1749,164 @@ print(f'Size of a batch of spike data is {spike_data.size()}')
     
 
 
+# first search : time constants and learning rates
 
-"""
+def define_model(trial):
+
+    STDP_type = trial.suggest_categorical('STDP_type', ['classic', 'offset'])
+    if STDP_type == 'offset':
+        STDP_offset = trial.suggest_float("STDP_offset", 0.0001, 0.1, log = True)
+        learning_rate = trial.suggest_float("learn_rate", 0.0001, 0.1, log = True)
+        A_minus, A_plus = 0.0, 0.0
+        beta_plus = 0.0 # we don't need post synaptic traces if we use the offset STDP
+    else:
+        STDP_offset = 0.0
+        A_minus = trial.suggest_float("A_minus", 0.00005, 0.001, log = True )
+        A_plus = trial.suggest_float("A_plus", 0.00005, 0.001, log = True )
+        beta_plus = trial.suggest_float("beta_plus", 0.1, 1.0 )
+        learning_rate = 0.0 # we don't need learning rate if we use the classic STDP
+
+    pars = mnist_pars(
+        weight_initialization_type = 'clamp',
+        STDP_type = STDP_type,
+        A_minus = A_minus,
+        A_plus = A_plus,
+        beta_minus = trial.suggest_float("beta_minus", 0.1, 1.0 ),
+        beta_plus = beta_plus,
+        STDP_offset = STDP_offset,
+        learning_rate = learning_rate,
+        alpha = trial.suggest_float("alpha", 0.1, 1.0 ),
+        beta = trial.suggest_float("beta", 0.1, 1.0 ),
+        dynamic_threshold = True,
+        tau_theta = trial.suggest_float("tau_theta", 10, 1000, log = True),
+        theta_add = trial.suggest_float("theta_add", 0.2, 2.0, step = 0.2),
+        lateral_inhibition = True,
+        lateral_inhibition_strength = trial.suggest_float("inhi_strength", 0.01, 10.0, log = True),
+        store_records = False,
+        assignment_confidence = trial.suggest_float('ass_conf', 0.0, 0.01, step = 0.001)    
+    )
+
+    # define the model
+    input_size = 28*28
+    n_neurons = 100
+    model = snn_mnist(pars, input_size, n_neurons)
+    trial.set_user_attr('weight_initialization_type','clamp')
+    return model
+
+
+        
+
+
+# second search : number of neurons, batch size, num_steps, gain, min_rate
+
+def objective_2(trial):
+    # in this objective there 5 hyperparameters to optimize
+
+    # use cuda if available
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+
+    # define the model
+    pars = mnist_pars(
+        weight_initialization_type = 'shift',
+        STDP_type = 'classic',
+        A_minus = 0.0007,
+        A_plus = 0.0006,
+        beta_minus = 0.85,
+        beta_plus = 0.45,
+        reset_mechanism = 'subtract',
+        alpha = 0.95,
+        beta = 0.8,
+        dynamic_threshold = True,
+        tau_theta = 12,
+        theta_add = 2.0, # maybe greater
+        refractory_period = False,
+        lateral_inhibition = True,
+        lateral_inhibition_strength = 1.3,
+        store_records = False,
+        assignment_confidence = 0.0,
+    )
+
+    # define the model
+    input_size = 28*28
+    n_neurons = trial.suggest_int("n_neurons", 128, 1024, step = 64)
+    model = snn_mnist(pars, input_size, n_neurons).to(device)
+
+    batch_size = trial.suggest_categorical("batch_size", [50, 100, 200, 400]) #  the val and test are just 400 samples
+    num_steps = trial.suggest_int("num_steps", 200, 500, step = 50)
+    gain = trial.suggest_float("gain", 0.9, 20.0, log=True)
+    min_rate = trial.suggest_float("min_rate", 0.0, 0.5, step = 0.05)
+    mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42)
+    sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 25)
+
+    # train the model
+    min_spk_number = model.pars['min_spk_number'] * batch_size
+    num_epochs = 10
+    with torch.no_grad():
+        for epochs in range(num_epochs):
+            start_time = time.time()
+            with tqdm(total=len(sub_train), unit='batch', ncols=120) as pbar:
+
+                # Iterate through minibatches
+                for data_it, _ in sub_train:
+
+                    # forward pass
+                    model.forward(data_it)
+
+                    # check the min spk number
+                    flag = torch.stack(model.neuron_records['spk']).detach().numpy().sum() < min_spk_number
+                    trial.set_user_attr('min_spk_n_reached', not flag)
+
+                    # Update progress bar
+                    pbar.update(1)
+
+                # assign the label to the neurons
+                temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
+
+                # compute the accuracy so far
+                accuracy, mean_rate = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
+
+                # update the progress bar
+                pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
+
+                # report the accuracy
+                trial.report(accuracy, epochs)
+
+                # handle pruning
+                if trial.should_prune():
+                    raise optuna.exceptions.TrialPruned()
+                
+        # keep track on wandb  (I don't care to log epoch by epoch)
+        config = dict(trial.params)
+        config['trial.number'] = trial.number
+        run = wandb.init(
+            project = 'digit-recognition',
+            entity = 'g-latta',
+            name = 'test-wandb',
+            config = config,
+            group = 'STDP_optimization_1',
+            reinit = True
+        )
+        # log to wandb
+        run.log(
+            data = {'accuracy': accuracy, 
+                    'mean_rate': mean_rate, 
+                    'mean_weights': model.fc.weight.data.detach().numpy().mean(dtype=np.float64)},
+            step = epochs)
+
+        # close the wandb run
+        run.finish()  
+    
+        #trial.set_user_attr('weight_initialization_type','clamp')
+        trial.set_user_attr('mean_rate', mean_rate)
+        trial.set_user_attr('mean weights', model.fc.weight.data.detach().numpy().mean(dtype=np.float64))
+        #trial.set_user_attr('assign_mean_conf',np.mean(temp_assignments['conf_status']+0.0))
+
+        
+
+    return accuracy
+
+
+
 
 
 

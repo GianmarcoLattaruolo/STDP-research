@@ -106,6 +106,12 @@ class snn_mnist(nn.Module):
         self.forward_count = 0
         self.num_input_spikes = 0
 
+        # variable to use in the rate stabilization
+        # averaged number of spikes per neuron per image
+        self.anspnpi = []
+        # averaged spike rate at each time step for all the neurons
+        self.asrpts = []
+
 
     def weight_initializer(self): # sill in development
         
@@ -115,13 +121,13 @@ class snn_mnist(nn.Module):
             W = self.fc.weight.data
             W = W - W.min() + 0.001
             return W
-        elif self.pars['weight_initialization_type'] == 'norm_column':
+        elif self.pars['weight_initialization_type'] == 'norm_row':
             W =  torch.rand_like(self.fc.weight.data)*(self.w_max - self.w_min) + self.w_min
             # normalize the weights rows to 1
             W = W / W.sum(axis=1).reshape(-1,1)
             return W
         elif self.pars['weight_initialization_type'] == 'random':
-            W = torch.rand(self.n_neurons, self.input_size) * 0.1 * 1/self.n_neurons
+            W = torch.rand(self.n_neurons, self.input_size) * 1/self.n_neurons
             return torch.clamp(W, min=self.w_min, max=self.w_max)
         else:
             raise NotImplementedError("Only clamp, shift and norm_column weight initialization are implemented")
@@ -191,7 +197,8 @@ class snn_mnist(nn.Module):
             post_syn_traces = torch.zeros((self.batch_size, self.n_neurons))
 
             # iterate on the time steps
-            for time_step in range(image.shape[0]):
+            num_steps = image.shape[0]
+            for time_step in range(num_steps):
 
                 # indicator of the time step to store the records
                 store = self.pars['store_records'] and time_step % self.t == 0
@@ -222,12 +229,13 @@ class snn_mnist(nn.Module):
                 if self.pars['refractory_period'] and time_step > 0:
                      spk, syn, mem = self.compute_refractory_times(spk,spk_prev, mem_prev, syn_prev, mem, syn, store = store)
 
-                # store the spike at each time step
+                # store the spike at each time step independently of the store parameter
                 self.neuron_records['spk'].append(spk.to(dtype=torch.bool))
-
+                
                 # apply lateral inhibition
                 if self.pars['lateral_inhibition']:
                     syn = self.lateral_inhibition(spk, syn, mem)
+                
 
                 # eventually update the threshold
                 if self.pars['dynamic_threshold']:
@@ -238,6 +246,12 @@ class snn_mnist(nn.Module):
 
                 # update the weights
                 self.STDP_update(spk, image[time_step], post_syn_traces, pre_syn_traces[time_step], store = store)
+
+        # averaged number of spikes per neuron per image
+        spk_record = torch.stack( self.neuron_records['spk'][-num_steps:]) +0.0
+        self.anspnpi.append(spk_record.sum(axis=0).mean().detach().numpy())
+        # averaged spike rate at each time step for all the neurons
+        self.asrpts.append(spk_record.mean(dim = (1,2)).detach().numpy())
 
         return 
 
@@ -317,7 +331,7 @@ class snn_mnist(nn.Module):
             self.neuron_records['syn'][-1] = syn
 
         # decrease the refractory period
-        self.refractory_times = self.refractory_times - 1 
+        self.refractory_times = torch.clamp(self.refractory_times - 1, min=0) 
 
         # return the corrected spk, mem and syn
         return spk, syn, mem
@@ -498,6 +512,8 @@ class snn_mnist(nn.Module):
                 # update the weights
                 W = self.fc.weight.data 
                 exponent = self.pars['mu_exponent']
+                # in this case w_max must be adjusted, 1 is too big!
+                self.w_max = W.max() + 0.1
                 W = W + A_plus * LTP * (self.w_max - W)**exponent - A_minus *  LTD * (W - self.w_min)**exponent
                 #W = torch.clamp(W, min=self.w_min, max=self.w_max)
         else:
@@ -523,11 +539,12 @@ class snn_mnist(nn.Module):
             rates:  the mean over time of the spikes elucitated
                     numpy array of shape (batch_size, n_neurons)
         """
-
+        spk_test = []
+        
         with torch.no_grad():
-
-            # retrive the batch size
-            self.batch_size = image.shape[1]
+            
+            # initialize auxiliary attributes
+            _ = self.initialize_auxiliary_attributes(image)
 
             # init syn and mem
             syn, mem  = self.lif.init_synaptic()
@@ -542,13 +559,17 @@ class snn_mnist(nn.Module):
             # iterate on the time steps
             for time_step in range(image.shape[0]):
                 
+                # indicator of the time step to store the records
+                store = self.pars['store_records'] and time_step % self.t == 0
+                
                 # store the previous values of mem and syn to allow the refractory period to work
                 if self.pars['refractory_period'] and time_step > 0:
                         mem_prev = mem
                         syn_prev = syn
+                        spk_prev = spk
 
                         # update the refractory period using the spikes of the previous time step
-                        self.refractory_times = self.refractory_times - 1 + spk * self.ref_time
+                        self.refractory_times = self.refractory_times  + spk * self.ref_time
 
                 # run the fc layer
                 pre_train = self.fc(image[time_step])
@@ -558,10 +579,10 @@ class snn_mnist(nn.Module):
 
                 # add the new spikes
                 num_spk += spk
-
+                
                 # check if some neurons are in refractory time 
-                if self.pars['refractory_period']:
-                    spk, syn, mem = self.compute_refractory_times(spk,mem_prev, syn_prev, mem, syn)
+                if self.pars['refractory_period']  and time_step > 0:
+                    spk, syn, mem = self.compute_refractory_times(spk,spk_prev, mem_prev, syn_prev, mem, syn, store = store)
 
                 # apply lateral inhibition
                 if self.pars['lateral_inhibition']:
@@ -569,8 +590,17 @@ class snn_mnist(nn.Module):
 
                 # eventually update the threshold
                 if self.pars['dynamic_threshold']:
-                    self.lif.threshold = self.dynamic_threshold(spk, store = False)
+                    self.lif.threshold = self.dynamic_threshold(spk, store = store)
+                
+                spk_test.append(spk.to(dtype=torch.bool))
+
+        # averaged number of spikes per neuron per image
+        spk_record =torch.stack(spk_test) +0.0
+        self.anspnpi.append(spk_record.sum(axis=0).mean().detach().numpy())
+        # averaged spike rate at each time step for all the neurons
+        self.asrpts.append(spk_record.mean(dim = (1,2)).detach().numpy())
         
+
         return num_spk.detach().numpy()
 
 
@@ -745,52 +775,32 @@ def train_model(model, train_loader, val_loader = None, num_epochs = 1, val_accu
     
     if val_accuracy_record and val_loader is None:
         raise ValueError("If val_accuracy_record is set to True, val_loader must be provided")
-    
-    # retrive the minimum number of spikes to be emitted at each forward pass
-    min_spk_number = model.pars['min_spk_number']
-    record_spk = []
 
     # train the model
-    with torch.no_grad():
-        for epochs in range(num_epochs):
-            # Iterate through minibatches
-            start_time = time.time()
-            with tqdm(total=len(train_loader), unit='batch', ncols=120+40*val_accuracy_record) as pbar:
+    for epochs in range(num_epochs):
+        # Iterate through minibatches
+        start_time = time.time()
+        with tqdm(total=len(train_loader), unit='batch', ncols=120+40*val_accuracy_record) as pbar:
 
-                for data_it, _ in train_loader:
+            for data_it, _ in train_loader:
 
-                    # forward pass
-                    model.eval()
-                    model.forward(data_it)
-                    
-                    # check that all the neurons have emitted at least min_spk_number spikes
-                    spk_emitted = torch.stack(model.neuron_records['spk']) + 0. # shape (num_steps , batch_size, n_neurons)
-                    flag = np.min(spk_emitted.numpy().sum(axis = 0)) < min_spk_number
-                    if flag:
-                        anspnpi = spk_emitted.numpy().sum(axis = 0).mean()
-                        raise ValueError(f"One Neuron have not emitted at least {min_spk_number} spikes, anspnpi {anspnpi:.2e}")
-                    else:
-                        # reset just the spk records
-                        model.neuron_records['spk'] = []
-                        record_spk.append(spk_emitted)
+                # forward pass
+                model.forward(data_it)
 
+                # Update progress bar
+                pbar.update(1) 
 
-                    # Update progress bar
-                    pbar.update(1) 
+            if val_accuracy_record:
+                # assign the label to the neurons
+                temp_assignments = assign_neurons_to_classes(model, val_loader, verbose = 0 )
 
-                if val_accuracy_record:
-                    # assign the label to the neurons
-                    temp_assignments = assign_neurons_to_classes(model, val_loader, verbose = 0 )
+                # compute the accuracy so far (anspnpi = average number of spikes per neuron per image)
+                accuracy, anspnpi = classify_test_set(model, val_loader, temp_assignments, verbose = 0)
 
-                    # compute the accuracy so far (anspni = average number of spikes per neuron per image)
-                    accuracy, anspnpi = classify_test_set(model, val_loader, temp_assignments, verbose = 0)
-
-                    # update the progress bar
-                    pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s', ANSPNPI = f'{anspnpi:.2e}')
-                else:
-                    pbar.set_postfix( time=f'{time.time() - start_time:.2f}s')
-        
-        model.neuron_records['spk'] = record_spk
+                # update the progress bar
+                pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s', ANSPNPI = f'{anspnpi:.2e}')
+            else:
+                pbar.set_postfix( time=f'{time.time() - start_time:.2f}s')
 
     return model
 
@@ -863,18 +873,11 @@ def classify_test_set(model, test_loader, df_assignments, verbose = 1):
     # use the assignments to classify the test set
 
     accuracy_record = 0
-    tot_num_spk = 0
-
-    start_time = time.time()
-    for index, (data_it, targets_it) in enumerate(test_loader):
-
-        if (index+1) % 100 == 0 and verbose > 0:
-            print(f"Processing batch {index+1}/{len(test_loader)} --- {(time.time() - start_time):.2f} seconds ---")
+    for data_it, targets_it in test_loader:
 
         # forward pass
         model.eval()
         num_spk = model.forward_test(data_it)  # out shape : batch_size x n_neurons
-        tot_num_spk += num_spk.sum()
 
         # # identify for each image in the batch the highest response neuron assigned with confidence
         # confidences = list(df_assignments['conf_status'].values)
@@ -900,22 +903,13 @@ def classify_test_set(model, test_loader, df_assignments, verbose = 1):
                     break #  exit from the inner for loop if the assignment has been done with confidence
                 else:
                     continue # go to the next neuron if the assignment has not been done with confidence
-        
-        # # test if the two method are equals
-        # if np.sum(prediction2 != prediction) > 0:
-        #     print("The two methods to assign the neurons to the classes are not equals")
-
-        # check that all the neurons have been assigned with confidence
-        if np.sum(prediction == 20) > 0:
-            #print(f"Not all the neurons have been classified with confidence > {model.pars.get('assignment_confidence',0)}")
-            pass
                 
         # update the running accuracy
         accuracy_record += np.sum(prediction == targets_it.numpy())
             
     # display the accuracy
     accuracy_record = accuracy_record / (len(test_loader)*test_loader.batch_size)
-    averaged_num_spk_per_neuron_per_image = tot_num_spk / (model.n_neurons * len(test_loader)*test_loader.batch_size)
+    averaged_num_spk_per_neuron_per_image = np.sum(model.anspnpi[-len(test_loader):])/len(test_loader)
     
     return accuracy_record, averaged_num_spk_per_neuron_per_image
 

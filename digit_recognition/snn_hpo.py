@@ -64,226 +64,12 @@ from snn_models import *
 #                                        #
 ##########################################
 
-# first search : time constants and learning rates
-
-def define_model(trial):
-
-    STDP_type = trial.suggest_categorical('STDP_type', ['classic', 'offset'])
-    if STDP_type == 'offset':
-        STDP_offset = trial.suggest_float("STDP_offset", 0.0001, 0.1, log = True)
-        learning_rate = trial.suggest_float("learn_rate", 0.0001, 0.1, log = True)
-        A_minus, A_plus = 0.0, 0.0
-        beta_plus = 0.0 # we don't need post synaptic traces if we use the offset STDP
-    else:
-        STDP_offset = 0.0
-        A_minus = trial.suggest_float("A_minus", 0.00005, 0.001, log = True )
-        A_plus = trial.suggest_float("A_plus", 0.00005, 0.001, log = True )
-        beta_plus = trial.suggest_float("beta_plus", 0.1, 1.0 )
-        learning_rate = 0.0 # we don't need learning rate if we use the classic STDP
-
-    pars = mnist_pars(
-        weight_initialization_type = 'clamp',
-        STDP_type = STDP_type,
-        A_minus = A_minus,
-        A_plus = A_plus,
-        beta_minus = trial.suggest_float("beta_minus", 0.1, 1.0 ),
-        beta_plus = beta_plus,
-        STDP_offset = STDP_offset,
-        learning_rate = learning_rate,
-        alpha = trial.suggest_float("alpha", 0.1, 1.0 ),
-        beta = trial.suggest_float("beta", 0.1, 1.0 ),
-        dynamic_threshold = True,
-        tau_theta = trial.suggest_float("tau_theta", 10, 1000, log = True),
-        theta_add = trial.suggest_float("theta_add", 0.2, 2.0, step = 0.2),
-        lateral_inhibition = True,
-        lateral_inhibition_strength = trial.suggest_float("inhi_strength", 0.01, 10.0, log = True),
-        store_records = False,
-        assignment_confidence = trial.suggest_float('ass_conf', 0.0, 0.01, step = 0.001)    
-    )
-
-    # define the model
-    input_size = 28*28
-    n_neurons = 100
-    model = snn_mnist(pars, input_size, n_neurons)
-    trial.set_user_attr('weight_initialization_type','clamp')
-    return model
 
 
-
-def objective(trial):
-    # in this objective there are 13 hyperparameters to optimize 
-
-    # use cuda if available
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
-
-    # define the model
-    model = define_model(trial).to(device)
-
-    # define the data loader
-    batch_size = 100
-    num_steps = 200
-    gain = 1.
-    min_rate = 0.005
-    mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42)
-    sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 50)
-
-    test_list = []
-    # train the model
-    num_epochs = 3
-    with torch.no_grad():
-        for epochs in range(num_epochs):
-            start_time = time.time()
-            with tqdm(total=len(sub_train), unit='batch', ncols=120) as pbar:
-
-                # Iterate through minibatches
-                for data_it, _ in sub_train:
-
-                    # forward pass
-                    model.forward(data_it)
-
-                    test_list.append(torch.stack(model.neuron_records['spk']).detach().numpy().sum(dtype = np.float64))
-
-                    
-
-                    # Update progress bar
-                    pbar.update(1)
-
-                # assign the label to the neurons
-                temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
-
-                # compute the accuracy so far
-                accuracy, mean_rate = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
-
-                # update the progress bar
-                pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s', rate = f'{mean_rate:.2e}')
-
-                # report the accuracy
-                trial.report(accuracy, epochs)
-
-                # handle pruning
-                if trial.should_prune() or mean_rate < 0.00001:
-                    raise optuna.exceptions.TrialPruned()
-        
-        # set a user attribute to keep tracks of other statistics of the model trained
-        trial.set_user_attr('test_list', test_list)
-        trial.set_user_attr('mean_rate',mean_rate)
-        trial.set_user_attr('assign_mean_conf',np.mean(temp_assignments['conf_status']+0.0))
-
-        
-    return accuracy
-
-
-# second search : number of neurons, batch size, num_steps, gain, min_rate
-
-def objective_2(trial):
-    # in this objective there 5 hyperparameters to optimize
-
-    # use cuda if available
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
-
-    # define the model
-    pars = mnist_pars(
-        weight_initialization_type = 'shift',
-        STDP_type = 'classic',
-        A_minus = 0.0007,
-        A_plus = 0.0006,
-        beta_minus = 0.85,
-        beta_plus = 0.45,
-        reset_mechanism = 'subtract',
-        alpha = 0.95,
-        beta = 0.8,
-        dynamic_threshold = True,
-        tau_theta = 12,
-        theta_add = 2.0, # maybe greater
-        refractory_period = False,
-        lateral_inhibition = True,
-        lateral_inhibition_strength = 1.3,
-        store_records = False,
-        assignment_confidence = 0.0,
-    )
-
-    # define the model
-    input_size = 28*28
-    n_neurons = trial.suggest_int("n_neurons", 128, 1024, step = 64)
-    model = snn_mnist(pars, input_size, n_neurons).to(device)
-
-    batch_size = trial.suggest_categorical("batch_size", [50, 100, 200, 400]) #  the val and test are just 400 samples
-    num_steps = trial.suggest_int("num_steps", 200, 500, step = 50)
-    gain = trial.suggest_float("gain", 0.9, 20.0, log=True)
-    min_rate = trial.suggest_float("min_rate", 0.0, 0.5, step = 0.05)
-    mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42)
-    sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 25)
-
-    # train the model
-    min_spk_number = model.pars['min_spk_number'] * batch_size
-    num_epochs = 10
-    with torch.no_grad():
-        for epochs in range(num_epochs):
-            start_time = time.time()
-            with tqdm(total=len(sub_train), unit='batch', ncols=120) as pbar:
-
-                # Iterate through minibatches
-                for data_it, _ in sub_train:
-
-                    # forward pass
-                    model.forward(data_it)
-
-                    # check the min spk number
-                    flag = torch.stack(model.neuron_records['spk']).detach().numpy().sum() < min_spk_number
-                    trial.set_user_attr('min_spk_n_reached', not flag)
-
-                    # Update progress bar
-                    pbar.update(1)
-
-                # assign the label to the neurons
-                temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
-
-                # compute the accuracy so far
-                accuracy, mean_rate = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
-
-                # update the progress bar
-                pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
-
-                # report the accuracy
-                trial.report(accuracy, epochs)
-
-                # handle pruning
-                if trial.should_prune():
-                    raise optuna.exceptions.TrialPruned()
-                
-        # keep track on wandb  (I don't care to log epoch by epoch)
-        config = dict(trial.params)
-        config['trial.number'] = trial.number
-        run = wandb.init(
-            project = 'digit-recognition',
-            entity = 'g-latta',
-            name = 'test-wandb',
-            config = config,
-            group = 'STDP_optimization_1',
-            reinit = True
-        )
-        # log to wandb
-        run.log(
-            data = {'accuracy': accuracy, 
-                    'mean_rate': mean_rate, 
-                    'mean_weights': model.fc.weight.data.detach().numpy().mean(dtype=np.float64)},
-            step = epochs)
-
-        # close the wandb run
-        run.finish()  
-    
-        #trial.set_user_attr('weight_initialization_type','clamp')
-        trial.set_user_attr('mean_rate', mean_rate)
-        trial.set_user_attr('mean weights', model.fc.weight.data.detach().numpy().mean(dtype=np.float64))
-        #trial.set_user_attr('assign_mean_conf',np.mean(temp_assignments['conf_status']+0.0))
-
-        
-
-    return accuracy
-
-
-
-
+# set a user attribute to keep tracks of other statistics of the model trained
+# trial.set_user_attr('test_list', test_list)
+# trial.set_user_attr('mean_rate',mean_rate)
+# trial.set_user_attr('assign_mean_conf',np.mean(temp_assignments['conf_status']+0.0))
 
 
 
@@ -292,12 +78,13 @@ def objective_2(trial):
 class snn_hpo:
     
     def __init__(self, STDP_type, 
-        n_trials = 100,
+        n_trials = 1000,
         timeout = 3600,
+        accuracy_epochs = 10,
         n_jobs = os.cpu_count(),
         main_dir = r'C:\Users\latta\GitHub\STDP-research\digit_recognition',
-        sampler = optuna.samplers.TPESampler(seed=42),
-        pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=1, interval_steps=1,  n_min_trials=10),
+        seed = 42,
+        pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=1, interval_steps=1,  n_min_trials=20),
 
     ):
         
@@ -305,12 +92,15 @@ class snn_hpo:
         self.STDP_type = STDP_type
         self.n_trials = n_trials
         self.timeout = timeout
+        self.accuracy_epochs = accuracy_epochs
         self.n_jobs = n_jobs
         self.main_dir = main_dir
-        self.sampler = sampler
+        self.sampler = optuna.samplers.TPESampler(seed=seed)
         self.pruner = pruner
-    
-        # 0. the following parameters are fixed
+        # use cuda if available
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+            
+        # The following parameters are fixed
         self.fixed_params = {
             # simulation parameters
             'dt' : 1.,                                  # simulation time step [ms]  
@@ -324,10 +114,12 @@ class snn_hpo:
             'reset_mechanism' : 'subtract',             # reset mechanism for the neuron potential
             # parameters for dynamic threshold   
             'dynamic_threshold' : True,                 # use a dynamic threshold for the neuron
-            'tau_theta' : 20.,                          # time constant for the dynamic threshold                       
+            'tau_theta' : 1000.,                          # time constant for the dynamic threshold                       
             # parameters for lateral inhibition
             'lateral_inhibition': True,                 # use lateral inhibition
             'lateral_inhibition_strength': 0.1,         # strength of the lateral inhibition 
+            # parameters for the refractory period
+            'refractory_period' : True,                # use a refractory period
 
             # STDP parameters
             'beta_minus' : 0.25,                        # decay factor for the pre-synaptic trace
@@ -343,83 +135,170 @@ class snn_hpo:
 
     # define a function for the STDP parameters depending on the type
     def STDP_params(self, trial):
+        # retrive the STDP type
         STDP_type = self.STDP_type
+
         if STDP_type == 'classic':
-            A_minus = trial.suggest_float("A_minus", 0.00005, 0.001, log = True )
-            A_plus = trial.suggest_float("A_plus", 0.00005, 0.001, log = True )
-        
-            stdp_params = {
-                'STDP_type' : STDP_type,
-                'A_minus' : A_minus,
-                'A_plus' : A_plus,
-            }
+            A_minus = trial.suggest_float("A_minus", 0.00001, 0.001, log = True ) # from prelimanires grid search A_minus is much greater than A_plus
+            A_plus = trial.suggest_float("A_plus", 0.000001, 0.0001, log = True )
+            
+            stdp_params = {'A_minus' : A_minus,'A_plus' : A_plus}
 
         elif STDP_type == 'offset':
-            STDP_offset = trial.suggest_float("STDP_offset", 0.0001, 0.1, log = True)
-            leaning_rate = trial.suggest_float("learn_rate", 0.0001, 0.1, log = True)
-            stdp_params = {
-                'STDP_type' : STDP_type,
-                'STDP_offset' : STDP_offset,
-                'leaning_rate' : leaning_rate,
-            }
+
+            STDP_offset = trial.suggest_float("STDP_offset", 0.0001, 1.0, log = True)
+            leaning_rate = trial.suggest_float("learn_rate", 0.00001, 0.1, log = True)
+
+            stdp_params = {'STDP_offset' : STDP_offset,'leaning_rate' : leaning_rate}
         elif STDP_type == 'asymptotic':
 
-            A_minus = trial.suggest_float("A_minus", 0.00005, 0.001, log = True )
-            A_plus = trial.suggest_float("A_plus", 0.00005, 0.001, log = True )
-            stdp_params = {
-                'STDP_type' : STDP_type,
-                'A_minus' : A_minus,
-                'A_plus' : A_plus,
-            }
+            A_minus = trial.suggest_float("A_minus", 0.001, 10.0, log = True ) # from prelimanires grid search A_minus is much greater than A_plus
+            A_plus = trial.suggest_float("A_plus", 0.0001, 0.1, log = True )
+
+            stdp_params = {'A_minus' : A_minus,'A_plus' : A_plus}
 
         else:
             raise ValueError(f'Unknown STDP type: {STDP_type}')
+        
+        # common parameters
+        stdp_params['STDP_type'] =  STDP_type
+        stdp_params['theta_add'] = trial.suggest_float("theta_add", 0.0, 20.0, step = 0.5)
+        stdp_params['ref_time'] = trial.suggest_int("ref_time", 0, 20, step = 2)
 
         return stdp_params
 
     # define a function to log a posteriori the trials to wandb
-    def log_to_wandb(self):
-        # check that study, study_name and pars are defined
-        if not hasattr(self, 'study') or not hasattr(self, 'study_name') or not hasattr(self, 'pars'):
-            raise ValueError('Log to wandb is possible only after the optimization of the study')
-        # otherwise
-        study, study_name, pars = self.study, self.study_name, self.pars
-        # log the trials a posteriori
-        for trial in study.trials:
-            if trial.state != optuna.trial.TrialState.FAIL:
-                for key, value in trial.params.items():
-                    pars[key] = value
-                config = pars
-                config['trial.number'] = trial.number
-                config['trial.state'] = trial.state
-                run = wandb.init(
-                    project = 'digit-recognition',
-                    entity = 'g-latta',
-                    name = f'trial_{trial.number}',
-                    config = config,
-                    group = study_name,
-                    reinit = True
+    def log_to_wandb(self, study_type = 'accuracy'): # still in development
+        if study_type == 'rate':
+            # check that study, study_name and pars are defined
+            if not hasattr(self, 'rate_study'):
+                raise ValueError('Log to wandb is possible only after the optimization of the study')
+            # otherwise
+            study, study_name, pars = self.study, self.study_name, self.pars
+            # log the trials a posteriori
+            for trial in study.trials:
+                if trial.state != optuna.trial.TrialState.FAIL:
+                    for key, value in trial.params.items():
+                        pars[key] = value
+                    config = pars
+                    config['trial.number'] = trial.number
+                    config['trial.state'] = trial.state
+                    run = wandb.init(
+                        project = 'digit-recognition',
+                        entity = 'g-latta',
+                        name = f'trial_{trial.number}',
+                        config = config,
+                        group = study_name,
+                        reinit = True
+                    )
+                    # log to wandb
+                    run.log(
+                        data = {'accuracy': trial.value, 
+                                'mean_rate': trial.user_attrs['min_spk_n_reached']},
+                                )
+
+                    # close the wandb run
+                    run.finish()  
+        elif study_type == 'accuracy':
+            pass
+        return 
+
+
+    def my_callback(self):
+        # still in development
+        # I would like to print only when a new best trial is found
+        def logging_callback(study, frozen_trial):
+            previous_best_value = study.user_attrs.get("previous_best_value", None)
+            if previous_best_value != study.best_value:
+                study.set_user_attr("previous_best_value", study.best_value)
+                print(
+                    "Trial {} finished with best value: {} and parameters: {}. ".format(
+                    frozen_trial.number,
+                    frozen_trial.value,
+                    frozen_trial.params,
+                    )
                 )
-                # log to wandb
-                run.log(
-                    data = {'accuracy': trial.value, 
-                            'mean_rate': trial.user_attrs['min_spk_n_reached']},
-                            )
-
-                # close the wandb run
-                run.finish()  
-            return 
-
+        return logging_callback
+    
     # define a function to compute an error measure on the rate
-    def f_error(rate):
-
+    @staticmethod
+    def f_error(anspnpi, asrpts): 
+        """
+        I would like to have:
+        - the averge number of spikes per neuron per image around 5-40 (considering 100 time steps)
+        - the average spike rate per neuron at each time step quite low (0.05-0.4 spikes) as implied by the first point
+        - the variance of the average spike rate per neuron at each time step as low as possible
+        """
+        error = 0.0
+        f_out_interval_error = lambda x: (100-25*x)*(x<=4)+(5*x-200)/3*(x>=40)
+        spk_std = np.std(asrpts)
+        spk_mean = np.mean(asrpts)
+        np.random.seed(42)
+        correction_factor = 100/np.std(np.random.random(100))
+        error = f_out_interval_error(anspnpi) + correction_factor * spk_std + 100 * (spk_mean - 0.05) * (spk_mean > 0.05)
+        if error<0:
+            print(f'anspnpi = {anspnpi:.2e}, spk_std = {spk_std:.2e}, spk_mean = {spk_mean:.2e}, error = {error:.2e}')
+            raise ValueError('Error is negative')
+        # in the wrost cases the error should be around 200
         return error
 
-# 1. Execute a grid search for each STDP type
+    # define a function to calculate the best ranges and values from the rate stabilization study
+    def best_range_calculation(self, trial): 
 
-    def intialize_study_rate(self):
+        # initialize two empty dictionaries
+        best_ranges = {}
+        best_values = {}
+
+        # retrive all the trials from rate study
+        sort_trials_df = self.study_rate.trials_dataframe().sort_values(by='value', ascending=True)
+
+        # select only the complete trials
+        sort_trials_df = sort_trials_df[sort_trials_df['state'] == 'COMPLETE']
+
+        # select only the good trials, the first 200
+        good_trials = sort_trials_df.head(200)
+        
+        # retrive the best trial to fix some values
+        best_trial = self.study_rate.best_trial.params
+
+        best_values['gain'] = best_trial['gain']
+        best_values['min_rate'] = best_trial['min_rate']
+        best_values['weight_initializer'] = best_trial['weight_initializer']
+        best_values['theta_add'] = best_trial['theta_add']
+        best_values['ref_time'] = best_trial['ref_time']
+
+        # calculate the best ranges
+        if self.STDP_type == 'classic':
+            min_A_minus = good_trials['params_A_minus'].min()
+            max_A_minus = good_trials['params_A_minus'].max()
+            min_A_plus = good_trials['params_A_plus'].min()
+            max_A_plus = good_trials['params_A_plus'].max()
+            best_ranges['A_minus'] = trial.suggest_float('A_minus',min_A_minus, max_A_minus)
+            best_ranges['A_plus'] = trial.suggest_float('A_plus',min_A_plus, max_A_plus)
+
+        elif self.STDP_type == 'offset':
+            min_learnin_rate = good_trials['params_learning_rate'].min()
+            max_learnin_rate = good_trials['params_learning_rate'].max()
+            min_STDP_offset = good_trials['params_STDP_offset'].min()
+            max_STDP_offset = good_trials['params_STDP_offset'].max()
+            best_ranges['learning_rate'] = trial.suggest_float('learning_rate',min_learnin_rate, max_learnin_rate)
+            best_ranges['STDP_offset'] = trial.suggest_float('STDP_offset',min_STDP_offset, max_STDP_offset)
+            
+        elif self.STDP_type == "asymptotic":
+            min_A_minus = good_trials['params_A_minus'].min()
+            max_A_minus = good_trials['params_A_minus'].max()
+            min_A_plus = good_trials['params_A_plus'].min()
+            max_A_plus = good_trials['params_A_plus'].max()
+            best_ranges['A_minus'] = trial.suggest_float('A_minus',min_A_minus, max_A_minus)
+            best_ranges['A_plus'] = trial.suggest_float('A_plus',min_A_plus, max_A_plus)
+
+        return best_ranges, best_values
+    
+
+    # define a function to initialize the study for the rate stabilization
+    def initialize_rate_study(self):
         STDP = self.STDP_type
-        main_hpo_dir = self.main_dir+'\\'+STDP
+        main_hpo_dir = self.main_dir+'\\HPO'
 
         # 2. Fixed a type of STDP run small grid search to find good params that stabilize the post-synaptic rates
 
@@ -440,62 +319,70 @@ class snn_hpo:
         self.study_rate = study_rate
         return 
 
-    # define the objective:
+    # define the method to optimize the study on the rate stabilization:
     def optimize_rate(self):
-
-        def objetive(trial):
+        # check if self has study_rate attribute
+        if not hasattr(self, 'study_rate'):
+            raise ValueError('The study for the rate stabilization has not been initialized')
+        # otherwise
+        def objective(trial):
 
             # define the dataset and get the loader
             batch_size = 200 # it should not influence the rate
             num_steps = 100 # fixed it does not influence the rate
-            gain = trial.suggest_float("gain", 0.9, 20.0, log=True)
-            min_rate = trial.suggest_float("min_rate", 0.0, 0.5, step = 0.1)
-            subset_loader = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42).get_subset(100)
+            min_rate = trial.suggest_float("min_rate", 0.0, 0.2, step=0.01)
+            gain = trial.suggest_float("gain", 0.5, 20.0, step = 0.5)
+            subset_loader = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42).get_subset(30) # 2000 samples in the subset
             
             # define the model
             pars = mnist_pars(
-                **STDP_params(self.STDP_type, trial),  # this two dictionaries must not share any key
+                weight_initializer = trial.suggest_categorical('weight_initializer', ['clamp', 'shift', 'norm_row', 'random']),
+                **self.STDP_params(trial),  # this two dictionaries must not share any key
                 **self.fixed_params
             )
             n_neurons = 50 # fixed it does not influence the rate
-            model = snn_mnist(pars, n_neurons)
-
-            # define user attributes for the trial to keep track of the progress
-
+            model = snn_mnist(pars, 28*28, n_neurons).to(self.device)
 
             # make just one epoch to observe the rate
-            for data, _ in subset_loader:
+            with tqdm(total=len(subset_loader), unit='batch', ncols=120) as pbar:
 
-                with tqdm(total=len(subset_loader), unit='batch', ncols=120) as pbar:
+                # Iterate through minibatches  # with batch size 200 we have 3 batches
+                for batch, (data_it, _) in enumerate(subset_loader):
+                    # reset neuron records for spk
+                    model.neuron_records['spk'] = []
 
-                    # Iterate through minibatches
-                    for data_it, _ in subset_loader:
+                    # forward pass
+                    model.forward(data_it)
 
-                        # forward pass
-                        model.forward(data_it)
+                    # retrive the last rate statistics
+                    anspnpi = model.anspnpi[-1]
+                    asrpts = model.asrpts[-1]
 
-                        # compute the averaged number of spikes per neuron per image
-                        anspnpi = torch.stack(model.neuron_records['spk']).detach().numpy().mean(axis = (0,2))
+                    # compute the stabizilation error
+                    error = snn_hpo.f_error(anspnpi, asrpts)
 
-                        # update trial user attributes
-                        flag = torch.stack(model.neuron_records['spk']).detach().numpy().sum() < min_spk_number
-                        trial.set_user_attr('min_spk_n_reached', not flag)
+                    # report
+                    trial.report(error, batch)
 
-                        # Update progress bar
-                        pbar.update(1)
+                    # Update progress bar
+                    pbar.update(1)
+                    pbar.set_postfix(ANSPNPI = f'{anspnpi:.2e}')
 
-                    # assign the label to the neurons
-                    temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
+                    # handle pruning
+                    if trial.should_prune():
+                        raise optuna.exceptions.TrialPruned()
+            
+            # set user attributes
+            total_anspnpi = np.mean(model.anspnpi[-len(subset_loader):], dtype = np.float64)
+            first_anspnpi = np.mean(model.anspnpi[-len(subset_loader)], dtype = np.float64)
+            last_anspnpi = np.mean(model.anspnpi[-1], dtype = np.float64)
+            mean_weights = model.fc.weight.data.detach().numpy().mean(dtype=np.float64)
+            trial.set_user_attr('total_anspnpi', total_anspnpi)
+            trial.set_user_attr('first_anspnpi', first_anspnpi)
+            trial.set_user_attr('last_anspnpi', last_anspnpi)
+            trial.set_user_attr('mean_weights', mean_weights)
 
-                    # compute the accuracy so far
-                    accuracy, mean_rate = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
-
-                    # update the progress bar
-                    pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s')
-
-                    # report the accuracy
-                    trial.report(accuracy, epochs)
-            return f_error(rate)
+            return error
 
         
         # optimize the study
@@ -505,50 +392,212 @@ class snn_hpo:
             timeout = self.timeout,
             n_jobs = self.n_jobs, 
             catch = (), 
-            callbacks = [MaxTrialsCallback(2000, states=(TrialState.COMPLETE,))], 
+            callbacks = [MaxTrialsCallback(7000, states=(TrialState.COMPLETE,)), self.my_callback()], 
             gc_after_trial = True, 
             show_progress_bar = False
         )
 
-    # 3. With the range found in the previous step, run a larger grid search to find the best parameters for accuracy
+        return
     
-    study_name = STDP + 'optimize_accuracy'
-    study_storage = f'sqlite:///{main_hpo_dir}/{study_name}.db'
-    # initialize the study
-    study = optuna.create_study(
-        direction="maximize", 
-        study_name = study_name,
-        storage = study_storage,
-        load_if_exists = True,
-        sampler = sampler,
-        pruner = pruner
-    )
-    study.set_user_attr(f"{STDP}", "accuracy maximization")
-    # use the previous results to set the range of the parameters
-    best_params = study.best_trial.params
-    def best_range_calculation(best_params):
+    # define a function to print the statistics of the study
+    def print_statistics(self):
+        flag = True
+        if hasattr(self, 'study_rate'):
+            print(f"Study for the rate stabilization statistics of {self.STDP_type} STDP: ")
+            study = self.study_rate
+            pruned_traials = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
+            complete_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
 
-        return best_range
-    # define the objective:
-    def objective_accuracy(trial, best_range = best_range):
-        # define the datasets and get the loaders
-        batch_size = ...
-        num_steps = ...
-        gain = ...
-        min_rate = ...
-        mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42)
-        sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 50)
-        # define the model
+            print(f"")
+            print(f"  Number of finished trials: {len(study.trials)}")
+            print(f"  Number of pruned trials: {len(pruned_traials)}")
+            print(f"  Number of complete trials: {len(complete_trials)}")
+
+            print("Best trial:")
+            best_trial = study.best_trial
+
+            print(f"  Value: {best_trial.value}")
+
+            print("  Params: ")
+            for key, value in best_trial.params.items():
+                print(f"    {key}: {value}")
+            flag = False
+
+            print(f'Best Ranges')
+            sort_trials_df = study.trials_dataframe().sort_values(by='value', ascending=True)
+            sort_trials_df = sort_trials_df[sort_trials_df['state'] == 'COMPLETE']
+            good_trials = sort_trials_df.head(1000)
+            if self.STDP_type == 'classic' or self.STDP_type == 'asymptotic':
+                min_A_minus = good_trials['params_A_minus'].min()
+                max_A_minus = good_trials['params_A_minus'].max()
+                min_A_plus = good_trials['params_A_plus'].min()
+                max_A_plus = good_trials['params_A_plus'].max()
+                print(f'A_minus: {min_A_minus:.2e} - {max_A_minus:.2e}')
+                print(f'A_plus: {min_A_plus:.2e} - {max_A_plus:.2e}')
+                # plot the distribution of A_minus and A_plus
+                plt.hist(good_trials['params_A_minus'], bins = 20)
+                plt.title('A_minus distribution')
+                plt.show()
+                plt.hist(good_trials['params_A_plus'], bins = 20)
+                plt.title('A_plus distribution')
+                plt.show()
+            elif self.STDP_type == 'offset':
+                min_learnin_rate = good_trials['params_learn_rate'].min()
+                max_learnin_rate = good_trials['params_learn_rate'].max()
+                min_STDP_offset = good_trials['params_STDP_offset'].min()
+                max_STDP_offset = good_trials['params_STDP_offset'].max()
+                print(f'learning_rate: {min_learnin_rate:.2e} - {max_learnin_rate:.2e}')
+                print(f'STDP_offset: {min_STDP_offset:.2e} - {max_STDP_offset:.2e}')
+                # plot the histogram of param_learning_rate
+                plt.hist(good_trials['params_learn_rate'], bins = 20)
+                plt.title('Learning rate distribution')
+                plt.show()
+
+
+        if hasattr(self, 'study_accuracy'):
+            print(f"Study for the accuracy optimization statistics: ")
+            study = self.study_accuracy
+            pruned_traials = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
+            complete_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+
+            print(f"")
+            print(f"  Number of finished trials: {len(study.trials)}")
+            print(f"  Number of pruned trials: {len(pruned_traials)}")
+            print(f"  Number of complete trials: {len(complete_trials)}")
+
+            print("Best trial:")
+            trial = study.best_trial
+
+            print(f"  Value: {trial.value}")
+
+            print("  Params: ")
+            for key, value in trial.params.items():
+                print(f"    {key}: {value}")
+            flag = False
+        if flag:
+            print('No study has been initialized')
+
+        return
+    
+    # define a function to initialize the study for the accuracy optimization
+    def initialize_accuracy_study(self):
+
+        # 3. With the range found in the previous step, run a larger grid search to find the best parameters for accuracy
+        STDP = self.STDP_type
+        main_hpo_dir = self.main_dir+'\\HPO'
+
+        study_name = STDP + '_STDP_optimize_accuracy'
+        study_storage = f'sqlite:///{main_hpo_dir}/{study_name}.db'
+        # initialize the study
+        study = optuna.create_study(
+            direction="maximize", 
+            study_name = study_name,
+            storage = study_storage,
+            load_if_exists = True,
+            sampler = self.sampler,
+            pruner = self.pruner
+        )
+        study.set_user_attr(f"{STDP}", "accuracy maximization")
+
+        self.study_accuracy = study
+        return
+    
+    # define the method to optimize study on the accuracy
+    def optimize_accuracy(self):
+        # check if self has study_rate attribute
+        if not hasattr(self, 'study_accuracy'):
+            raise ValueError('The study for the accuracy optimization has not been initialized')
+        # check if a best trial for the rate stabilization is available
+        if not hasattr(self, 'study_rate'):
+            raise ValueError('The study for the rate stabilization has not been initialized')
+        if len(self.study_rate.trials) < 2:
+            raise ValueError('The study for the rate stabilization has not been completed')
+        
+        # define the function to optimize the accuracy
+        def objective_accuracy(trial):
             
-        pars = mnist_pars(
-            **self.fixed_params,
+            # calculate the best ranges and values from the rate stabilization study
+            best_ranges, best_values = self.best_range_calculation(trial)
+
+            # define the datasets and get the loaders
+            batch_size = trial.suggest_categorical("batch_size", [50, 100, 200, 400])
+            num_steps = trial.suggest_int("num_steps", 200, 500, step = 50)
+            gain = best_values['gain']
+            min_rate = best_values['min_rate']
+            mnist_train = rate_encoded_mnist(batch_size, num_steps=num_steps, gain=gain, min_rate = min_rate, train=True, my_seed = 42)
+            sub_train, sub_val, sub_test = mnist_train.get_subset_train_val_test(subset = 25)
+
+            # define the model
+            pars = mnist_pars(
+                assignment_confidence = trial.suggest_float('ass_conf', 0.00001,0.01, log = True),
+                **best_values,
+                **best_ranges, 
+                **self.fixed_params,
+            )
+            # define the model
+            n_neurons = trial.suggest_int("n_neurons", 128, 1024, step = 64)
+            model = snn_mnist(pars,28*28, n_neurons).to(self.device)
+
+            # set user attributes
+            trial.set_user_attr('weight_initialization_type',best_values['weight_initializer'])
+            trial.set_user_attr('min_spk',[])
+
+            # train the model
+            num_epochs = 10
+            for epochs in range(num_epochs):
+                start_time = time.time()
+
+                with tqdm(total=len(sub_train), unit='batch', ncols=120) as pbar:
+                    # Iterate through minibatches
+                    for data_it, _ in sub_train:
+                        # reset the spk records before the forward pass
+                        model.neuron_records['spk'] = []
+
+                        # forward pass
+                        model.forward(data_it)
+
+                        # check the min spk number
+                        min_spk = torch.stack(model.neuron_records['spk']).detach().numpy().sum(dtype = np.float64) 
+                        trial.user_attrs['min_spk'].append(min_spk)
+
+                        # Update progress bar
+                        pbar.update(1)
+
+                    # assign the label to the neurons
+                    temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
+
+                    # compute the accuracy so far
+                    accuracy, anspnpi = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
+
+                    # update the progress bar
+                    pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s', ANSPNPI = f'{anspnpi:.2e}')
+
+                    # report the accuracy
+                    trial.report(accuracy, epochs)
+
+                    # handle pruning
+                    if trial.should_prune():
+                        raise optuna.exceptions.TrialPruned()
+        
+            return accuracy
+        
+        # optimize the study
+        self.study_accuracy.optimize(
+            objective_accuracy, 
+            n_trials = self.n_trials, 
+            timeout = self.timeout,
+            n_jobs = self.n_jobs, 
+            catch = (), 
+            callbacks = [MaxTrialsCallback(7000, states=(TrialState.COMPLETE,))], 
+            gc_after_trial = True, 
+            show_progress_bar = False
         )
 
+        return
 
 
-        ...
-        return accuracy
 
+############################################################################################################
     # 4. compare the results between the different STDP types and choose the best
     ...    
     # 5. run a final grid search to find the best parameters for the best STDP type, optimizing also the dataset parameters    
