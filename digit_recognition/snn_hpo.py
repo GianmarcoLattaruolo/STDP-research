@@ -264,8 +264,8 @@ class snn_hpo:
         best_values['gain'] = best_trial['gain']
         best_values['min_rate'] = best_trial['min_rate']
         best_values['weight_initializer'] = best_trial['weight_initializer']
-        best_values['theta_add'] = best_trial['theta_add']
-        best_values['ref_time'] = best_trial['ref_time']
+        # best_values['theta_add'] = best_trial['theta_add']
+        # best_values['ref_time'] = best_trial['ref_time']
 
         # calculate the best ranges
         if self.STDP_type == 'classic':
@@ -273,8 +273,14 @@ class snn_hpo:
             max_A_minus = good_trials['params_A_minus'].max()
             min_A_plus = good_trials['params_A_plus'].min()
             max_A_plus = good_trials['params_A_plus'].max()
+            theta_add_max = good_trials['params_theta_add'].max()
+            theta_add_min = good_trials['params_theta_add'].min()
+            ref_time_max = good_trials['params_ref_time'].max()
+            ref_time_min = good_trials['params_ref_time'].min()
             best_ranges['A_minus'] = trial.suggest_float('A_minus',min_A_minus, max_A_minus)
             best_ranges['A_plus'] = trial.suggest_float('A_plus',min_A_plus, max_A_plus)
+            best_ranges['theta_add'] = trial.suggest_float('theta_add',theta_add_min, theta_add_max)
+            best_ranges['ref_time'] = trial.suggest_int('ref_time',ref_time_min, ref_time_max)
 
         elif self.STDP_type == 'offset':
             min_learnin_rate = good_trials['params_learning_rate'].min()
@@ -486,7 +492,7 @@ class snn_hpo:
         STDP = self.STDP_type
         main_hpo_dir = self.main_dir+'\\HPO'
 
-        study_name = STDP + '_STDP_optimize_accuracy'
+        study_name = STDP + '_STDP_optimize_acc'
         study_storage = f'sqlite:///{main_hpo_dir}/{study_name}.db'
         # initialize the study
         study = optuna.create_study(
@@ -543,7 +549,7 @@ class snn_hpo:
             trial.set_user_attr('min_spk',[])
 
             # train the model
-            num_epochs = 10
+            num_epochs = 5
             for epochs in range(num_epochs):
                 start_time = time.time()
 
@@ -578,6 +584,16 @@ class snn_hpo:
                     # handle pruning
                     if trial.should_prune():
                         raise optuna.exceptions.TrialPruned()
+                
+            # set user attributes
+            total_anspnpi = np.mean(model.anspnpi[-len(sub_train):], dtype = np.float64)
+            first_anspnpi = np.mean(model.anspnpi[-len(sub_train)], dtype = np.float64)
+            last_anspnpi = np.mean(model.anspnpi[-1], dtype = np.float64)
+            mean_weights = model.fc.weight.data.detach().numpy().mean(dtype=np.float64)
+            trial.set_user_attr('total_anspnpi', total_anspnpi)
+            trial.set_user_attr('first_anspnpi', first_anspnpi)
+            trial.set_user_attr('last_anspnpi', last_anspnpi)
+            trial.set_user_attr('mean_weights', mean_weights)
         
             return accuracy
         
