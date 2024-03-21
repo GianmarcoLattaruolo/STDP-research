@@ -544,9 +544,8 @@ class snn_hpo:
             n_neurons = trial.suggest_int("n_neurons", 128, 1024, step = 64)
             model = snn_mnist(pars,28*28, n_neurons).to(self.device)
 
-            # set user attributes
-            trial.set_user_attr('weight_initialization_type',best_values['weight_initializer'])
-            trial.set_user_attr('min_spk',[])
+            # list to store the confidences in assignment
+            conf_ass = []
 
             # train the model
             num_epochs = 5
@@ -563,14 +562,16 @@ class snn_hpo:
                         model.forward(data_it)
 
                         # check the min spk number
-                        min_spk = torch.stack(model.neuron_records['spk']).detach().numpy().sum(dtype = np.float64) 
-                        trial.user_attrs['min_spk'].append(min_spk)
+                        # min_spk = torch.stack(model.neuron_records['spk']).detach().numpy().sum(dtype = np.float64) 
+                        # trial.user_attrs['min_spk'].append(min_spk)
 
                         # Update progress bar
                         pbar.update(1)
 
                     # assign the label to the neurons
                     temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
+                    percent_of_good_assignments = np.mean(np.array(temp_assignments.conf_status +0.0), dtype = np.float64)
+                    conf_ass.append(percent_of_good_assignments)
 
                     # compute the accuracy so far
                     accuracy, anspnpi = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
@@ -594,7 +595,8 @@ class snn_hpo:
             trial.set_user_attr('first_anspnpi', first_anspnpi)
             trial.set_user_attr('last_anspnpi', last_anspnpi)
             trial.set_user_attr('mean_weights', mean_weights)
-        
+            trial.set_user_attr('conf_ass', conf_ass)
+
             return accuracy
         
         # optimize the study
