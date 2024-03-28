@@ -134,7 +134,7 @@ def default_pars(type_parameters = 'simple', **kwargs):
 
 
 
-def weight_initializer(pars, N_post, N_pre = None, I=None, my_seed = 2024, type_init = 3, tensor = False):
+def weight_initializer(pars, N_post, N_pre = None, I=None, type_init = 1, my_seed = 2024,  tensor = False):
 
     """
     ARGS:
@@ -144,8 +144,6 @@ def weight_initializer(pars, N_post, N_pre = None, I=None, my_seed = 2024, type_
     RETURNS:
     - W: initial weights with shape (N_pre, N_post)
     """
-    if I is not None:
-        type_init = 3
 
     if N_pre is None and I is not None:
         N_pre = np.shape(I)[1]
@@ -165,33 +163,38 @@ def weight_initializer(pars, N_post, N_pre = None, I=None, my_seed = 2024, type_
         np.random.seed(seed=my_seed)
 
     if type_init == 1:
-        # compute the mean fire rate for each pre-synaptic neuron
-        mean_rate = np.mean(I, axis = 0)+1e-4
+        # random uniform between w_min and w_max
+        W = np.random.rand(N_post, N_pre) * (pars['w_max'] - pars['w_min']) + pars['w_min']
         
-        # define the mean vector for the weights as inverse of the mean rate
-        mean_vector = 1.5/mean_rate
-
-        # divide by the pre-synaptic number of neurons
-        mean_vector = mean_vector/N_pre
-
-        print(f'mean vector max:{mean_vector.max()}')
-
-        # initialize the weights as uniform random variables between 0 and 2 * mean_vector
-        W = np.random.uniform(0, 2*mean_vector, (N_post, N_pre))
-
-        # clip _between 0 and 1
-        W = np.clip(W, 0, 1)
 
     elif type_init == 2:
-        mean_rate = np.mean(I)+1e-4
-        mean_value = 1.5/(mean_rate*N_pre)
-        W = np.random.uniform(0, 2*mean_value, (N_post, N_pre))
-        W = np.clip(W, 0, 1)
+        W = np.random.rand(N_post, N_pre) * 1/N_pre
+        W = np.clip(W,  pars['w_min'], pars['w_max'])
+        
 
     elif type_init == 3:
-        W = np.ones((N_post, N_pre)) * pars['w_init_value']
+        # normalize the rows
+        W = np.random.rand(N_post, N_pre) * (pars['w_max'] - pars['w_min']) + pars['w_min']
+        W = W / W.sum(axis=1).reshape(-1,1)
+
+
+    elif type_init == 4:
+        # compute the mean fire rate for each pre-synaptic neuron
+        mean_rate = np.mean(I, axis = 0)+1e-5
+        
+        # define the mean vector for the weights as inverse of the mean rate
+        mean_vector = 1./mean_rate
+
+
+        # initialize the weights as uniform random variables between 0 and 2 * mean_vector
+        W = np.random.uniform(mean_vector, 1/N_pre , (N_post, N_pre))
+
+        # clip _between 0 and 1
+        W = np.clip(W, pars['w_min'], pars['w_max'])
+
 
     return W if not tensor else torch.from_numpy(W.T).float()
+
 
 
 

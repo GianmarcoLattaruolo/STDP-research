@@ -160,6 +160,16 @@ def raster_plot(
 
 
 
+
+
+
+
+
+
+
+
+
+
 def weights_plot(pars, weights_history,time_step = None, time_in_ms = False, title = None, subsampling = 1):
     """
     Plot the weights changes during the simulation through a colored image, a graph and a histogram
@@ -192,40 +202,61 @@ def weights_plot(pars, weights_history,time_step = None, time_in_ms = False, tit
         return
     
     # initialize the plot
-    fig,ax = plt.subplots(3, figsize=(12, 10), gridspec_kw={'height_ratios': [1, 2, 1]})#, sharex=True)
+    # fig,ax = plt.subplots(2, figsize=(12, 10), gridspec_kw={'height_ratios': [2, 1]})#, sharex=True)
+    fig,ax = plt.subplots(1, figsize=(12, 6))#, sharex=True)
 
-    # plot the weights history as a colored image
-    fig.colorbar(ax[0].imshow(weights_history[:,:].T, cmap = 'viridis', aspect='auto'), ax=ax[0], orientation='vertical', fraction = 0.01, pad = 0.01)
-    ax[0].set_xlabel(label_x)
-    ax[0].axvline(time_step, 0., 1., color='red', ls='--')
-    # remove the background grid
-    ax[0].grid(False)
-    ax[0].set_ylabel('Synaptic weights')
+
+    # # plot the weights history as a colored image
+    # weights_df = pd.DataFrame(weights_history)
+    # weights_df.plot(ax = ax[0], legend = False, color = 'tab:blue', alpha = 0.2, lw = 1.)
+    # ax[0].set_ylabel("Synaptic Weight")
+    # ax[0].set_xlabel("Time step")
+    # if title:
+    #     ax[0].set_title(title)
+    # else:
+    #     ax[0].set_title('Synaptic weights over time')
+      # plot the weights history as a colored image
+    weights_df = pd.DataFrame(weights_history)
+    weights_df.plot(ax = ax, legend = False, color = 'tab:blue', alpha = 0.2, lw = 0.5)
+    ax.set_ylabel("Synaptic Weight")
+    ax.set_xlabel("Time step")
     if title:
-        ax[0].set_title(title)
+        ax.set_title(title)
     else:
-        ax[0].set_title('Synaptic weights over time')
+        ax.set_title('Synaptic weights over time')
     
-    # plot the weights history as a graph
-    ax[1].plot(time_steps[::subsampling], weights_history[ ::subsampling,:], lw=1., alpha=0.7)
-    ax[1].axvline(time_step, 0., 1., color='red', ls='--')
-    ax[1].set_xlabel(label_x)
-    ax[1].set_ylabel('Weight')
+    # # plot the weights history as a graph
+    # ax[1].plot(time_steps[::subsampling], weights_history[ ::subsampling,:], lw=1., alpha=0.7)
+    # ax[1].axvline(time_step, 0., 1., color='red', ls='--')
+    # ax[1].set_xlabel(label_x)
+    # ax[1].set_ylabel('Weight')
 
     # plot the weights distribution at a given time step
-    w_min = np.min(weights_history[time_step,:])-0.1
-    w_max = np.max(weights_history[time_step,:])+0.1
-    width = (w_max - w_min)/51
-    bins = np.arange(w_min, w_max, width)
-    #g_dis, _ = np.histogram(weights_history[time_step,:], bins)
-    #ax[1].bar(bins[1:], g_dis, color='b', alpha=0.5, width=width)
-    ax[2].hist(weights_history[time_step,:], bins, color='b', alpha=0.5, facecolor = '#2ab0ff', edgecolor='#169acf', linewidth=0.5)
-    ax[2].set_xlabel('weights ditribution')
-    ax[2].set_ylabel('Number')
-    ax[2].set_title(f'Time step: {time_step}')
+    # w_min = np.min(weights_history[time_step,:])-0.1
+    # w_max = np.max(weights_history[time_step,:])+0.1
+    # width = (w_max - w_min)/51
+    # bins = np.arange(w_min, w_max, width)
+    # #g_dis, _ = np.histogram(weights_history[time_step,:], bins)
+    # #ax[1].bar(bins[1:], g_dis, color='b', alpha=0.5, width=width)
+    # ax[1].hist(weights_history[time_step,:], bins, color='b', alpha=0.5, facecolor = '#2ab0ff', edgecolor='#169acf', linewidth=0.5)
+    # ax[1].set_xlabel('weights ditribution')
+    # ax[1].set_ylabel('Number')
+    # ax[1].set_title(f'Time step: {time_step}')
     plt.tight_layout()
     plt.show()
     
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

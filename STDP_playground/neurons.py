@@ -104,7 +104,8 @@ class LIFNeuron:
 
             # increase the threshold if wanted
             if self.dynamic_threshold:
-                self.threshold = self.pars['ratio_thr'] * (self.threshold-self.U_resting) + self.U_resting
+                #self.threshold = self.pars['ratio_thr'] * (self.threshold-self.U_resting) + self.U_resting
+                self.threshold = self.threshold + self.pars['ratio_thr']
 
             # reset the refractory period count down
             if self.refractory_time:
