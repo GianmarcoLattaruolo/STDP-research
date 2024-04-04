@@ -1906,7 +1906,80 @@ def objective_2(trial):
     return accuracy
 
 
+# hyperparameter values
+base_threshold = 1 # membrane threshold
+mem_rest = 0       # resting potential
+gamma = 0.25       # additive factor for the threshold
+n_ref = 5          # refractory period
+beta = 0.8         # decay factor
+beta_theta = 0.9   # decay factor for the threshold
+num_steps = 1000   # number of time steps for the simulation
 
+# optional mehcanims
+refractory_time = True
+dynamic_threshold = True
+reset = 'Hard' # or 'Subtraction'
 
+# record variables
+mem_record = []
+spk_record = []
+threshold_record = []
+
+# required variables
+I_inj_values = np.random.random(num_steps)
+threshold = base_threshold
+
+for I_inj in I_inj_values:
+    
+        if refractory_time:
+            # check if we are in the refractory period of the neuron
+            if t_ref_left > 0:
+                # update the refractory period remaining
+                t_ref_left = t_ref_left - 1
+                # store the records
+                mem_record.append(mem)
+                spk_record.append(0)
+                if dynamic_threshold:
+                    threshold_record.append(threshold)
+                # exit the forward
+                pass
+        
+        # check if there's a spike
+        spk = mem > threshold
+        spk_record.append(int(spk))
+
+        if spk:
+            # reset the membrane potential
+            if reset == 'Hard':
+                mem = mem_rest
+            elif reset == 'Subtraction':
+                mem = mem-(threshold-mem_rest)
+
+            # increase the threshold if wanted
+            if dynamic_threshold:
+                threshold = threshold + gamma
+
+            # reset the refractory period count down
+            if refractory_time:
+                t_ref_left = n_ref
+
+        # update the membrane potential:
+        # exponential decay
+        mem = mem * beta
+        # decay towards the resting potential
+        mem += (1-beta) * mem_rest
+        # add the contribution due to the incoming current
+        mem +=  I_inj
+        # store the membrane potential
+        mem_record.append(mem)
+
+        if dynamic_threshold:
+            # update the membrane threshold
+            # exponential decay
+            threshold *= beta_theta
+            # decaying toward the resting threshold
+            threshold += (1-beta_theta)*base_threshold
+            # store the threshold
+            threshold_record.append(threshold)
 
 

@@ -140,7 +140,7 @@ def raster_plot(
         ax[1].set_yticks(np.arange(0, N_post, max(round(N_post/10),5)))
         ax[1].set_ylabel(y_2_label)
         ax[1].set_xlabel(label_x)
-
+        ax[1].set_title('Input Spike Trains')
         plt.show()
     else:
 
@@ -217,7 +217,7 @@ def weights_plot(pars, weights_history,time_step = None, time_in_ms = False, tit
     #     ax[0].set_title('Synaptic weights over time')
       # plot the weights history as a colored image
     weights_df = pd.DataFrame(weights_history)
-    weights_df.plot(ax = ax, legend = False, color = 'tab:blue', alpha = 0.2, lw = 0.5)
+    weights_df.plot(ax = ax, legend = False, color = 'tab:blue', alpha = 0.2, linewidth= 0.3 )
     ax.set_ylabel("Synaptic Weight")
     ax.set_xlabel("Time step")
     if title:
