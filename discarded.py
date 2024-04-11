@@ -1906,80 +1906,59 @@ def objective_2(trial):
     return accuracy
 
 
-# hyperparameter values
-base_threshold = 1 # membrane threshold
-mem_rest = 0       # resting potential
-gamma = 0.25       # additive factor for the threshold
-n_ref = 5          # refractory period
-beta = 0.8         # decay factor
-beta_theta = 0.9   # decay factor for the threshold
-num_steps = 1000   # number of time steps for the simulation
 
-# optional mehcanims
-refractory_time = True
-dynamic_threshold = True
-reset = 'Hard' # or 'Subtraction'
+
+# hyperparameter values
+num_steps = 1000   # number of time steps for the simulation
+w_max = 1
+w_min = 0 
+beta_plus = 0.95
+beta_minus = 0.95
+A_plus = 0.001
+A_minus = 0.0011
+A_plus_function = lambda w: A_plus*(w_max - w)**2
+A_minus_function = lambda w: A_minus*(w - w_min)**2
+batch_size = 128 
+J = 784                      # presynaptic neurons
+I = 100                      # postsynaptic neurons
 
 # record variables
-mem_record = []
-spk_record = []
-threshold_record = []
+W_record = []
 
-# required variables
-I_inj_values = np.random.random(num_steps)
-threshold = base_threshold
+# initial variablesfor weights and traces
+pre_traces = np.zeros((batch_size, J))
+post_traces = np.zeros((batch_size, I))
+W = np.random.random((I,J))
 
-for I_inj in I_inj_values:
-    
-        if refractory_time:
-            # check if we are in the refractory period of the neuron
-            if t_ref_left > 0:
-                # update the refractory period remaining
-                t_ref_left = t_ref_left - 1
-                # store the records
-                mem_record.append(mem)
-                spk_record.append(0)
-                if dynamic_threshold:
-                    threshold_record.append(threshold)
-                # exit the forward
-                pass
-        
-        # check if there's a spike
-        spk = mem > threshold
-        spk_record.append(int(spk))
-
-        if spk:
-            # reset the membrane potential
-            if reset == 'Hard':
-                mem = mem_rest
-            elif reset == 'Subtraction':
-                mem = mem-(threshold-mem_rest)
-
-            # increase the threshold if wanted
-            if dynamic_threshold:
-                threshold = threshold + gamma
-
-            # reset the refractory period count down
-            if refractory_time:
-                t_ref_left = n_ref
-
-        # update the membrane potential:
-        # exponential decay
-        mem = mem * beta
-        # decay towards the resting potential
-        mem += (1-beta) * mem_rest
-        # add the contribution due to the incoming current
-        mem +=  I_inj
-        # store the membrane potential
-        mem_record.append(mem)
-
-        if dynamic_threshold:
-            # update the membrane threshold
-            # exponential decay
-            threshold *= beta_theta
-            # decaying toward the resting threshold
-            threshold += (1-beta_theta)*base_threshold
-            # store the threshold
-            threshold_record.append(threshold)
+# spike trains: change this in case of specific input
+spk_input = np.random.choice((0,1), size = (num_steps, batch_size, J)) 
+spk_output = np.random.choice((0,1), size = (num_steps, batch_size, I))
 
 
+for time_step in range(num_steps):
+    # current pre- and postsynaptic spikes
+    spk_pre, spk_post = spk_input[time_step], spk_output[time_step]
+
+    # eventually insert here the neurons' dynamics 
+    # spk_post = layer_of_neurons(spk_input, W)
+       
+    # compute LTP and LTD
+    A_plus_step = A_plus_function(W)
+    A_minus_step = A_minus_function(W)
+
+    # reshape spike and traces to allow the outer product
+    LTP = A_plus_step * np.matmul(spk_post.T, pre_traces)/batch_size
+    LTD = A_minus_step * np.matmul(post_traces.T, spk_pre)/batch_size
+
+    # update the weights
+    W = W + LTP - LTD
+    W = np.clip(W, a_max = w_max, a_min = w_min)
+
+    # store the records
+    W_record.append(W)
+
+    # update the traces
+    pre_traces = beta_plus * pre_traces + spk_pre
+    post_traces = beta_minus * post_traces + spk_post
+
+       

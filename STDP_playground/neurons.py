@@ -176,14 +176,20 @@ class LIFNeuron:
         time = np.arange(0, number_of_steps*dt, dt)
 
         # Generate Plots
-        fig, ax = plt.subplots(3, figsize = (15, 12), sharex=True,
-                            gridspec_kw = {'height_ratios': [0.8, 1.2, 0.4]})
+        fig, ax = plt.subplots(3, figsize = (14,7), sharex=True,
+                            gridspec_kw = {'height_ratios': [0.4, 1.2, 0.4]})
 
-        # Plot input current
-        ax[0].plot(time,cur, c="tab:orange")
-        ax[0].set_ylabel("Input Current ($I_{in}$)")
-        if title:
-            ax[0].set_title(title)
+        # # Plot input current
+        # ax[0].plot(time,cur, c="tab:orange")
+        # ax[0].set_ylabel("Input Current ($I_{in}$)")
+        # if title:
+        #     ax[0].set_title(title)
+
+        # plot the raster plot of input spikes
+        ax[0].eventplot(np.array(np.where(cur>0))*dt,  color="black",linelengths=0.5, linewidths=1)
+        plt.ylabel("Input spikes")
+        plt.yticks([])
+
 
         # Plot membrane potential
         ax[1].plot(time, mem, label="Membrane Potential")
@@ -193,7 +199,7 @@ class LIFNeuron:
             if show_fmp:
                 ax[1].plot(time, fmp, c="green", linestyle="dashed", alpha=0.5, label="Free Membrane Potential")
         else:
-            ax[1].axhline(y=self.threshold, alpha=0.25, linestyle="dashed", c="red", linewidth=2, label="Threshold")
+            ax[1].axhline(y=self.threshold, alpha=0.75, linestyle="dashed", c="red", linewidth=2, label="Threshold")
             if show_fmp:
                 ax[1].plot(time, fmp, c="green", linestyle="dashed", alpha=0.5, label="Free Membrane Potential")
         ax[1].legend( loc="best")
