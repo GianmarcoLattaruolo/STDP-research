@@ -16,7 +16,20 @@ The repositor tructure is the following
   - learning_rules.py
   - experiments.py
   - plot_utils.py
-- **digit recognition**
-- 
+- **digit_recognition**
+  - HPO
+  - animation
+  - data
+  - digit_recognition.ipynb
+  - result.txt
+  - snn_dataset.py
+  - snn_experiments.py
+  - snn_hpo.py
+  - snn_models.py
+  - snn_plot_utils
+ 
+
+
+
 
 
