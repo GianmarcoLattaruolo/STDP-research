@@ -270,6 +270,7 @@ def simulation(
 ##########################################
 
 
+
 def repeat_ones(num_steps, N_pre, silent_time ):
     """
     ARGS:
@@ -483,3 +484,7 @@ def signals_with_patterns(
         perturbation_sites[time_step:time_step+length_pattern] = 1
 
     return I_original,  I_perturbed, start_times, perturbation_sites
+
+
+if __name__ == "__main__":
+    print('experiment is currently on the STDP-basic-experiments notebook')

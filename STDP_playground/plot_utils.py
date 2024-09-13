@@ -163,13 +163,6 @@ def raster_plot(
 
 
 
-
-
-
-
-
-
-
 def weights_plot(pars, weights_history,time_step = None, time_in_ms = False, title = None, subsampling = 1):
     """
     Plot the weights changes during the simulation through a colored image, a graph and a histogram
@@ -245,14 +238,6 @@ def weights_plot(pars, weights_history,time_step = None, time_in_ms = False, tit
     plt.tight_layout()
     plt.show()
     
-
-
-
-
-
-
-
-
 
 
 
@@ -854,4 +839,10 @@ def STDP_interactive_plot(pars_function, I, N_post = 10,
     #output = interactive_plot.children[-1]
     #output.layout.height = '350px'
     return final_widget
+
+
+
+if __name__ == "__main__":
+    print('experiment is currently on the STDP-basic-experiments notebook')
+
 

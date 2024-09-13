@@ -590,6 +590,8 @@ class PoissonNeuron:
 
 
 
-    
+if __name__ == "__main__":
+    print('experiment is currently on the STDP-basic-experiments notebook')
+
 
 
