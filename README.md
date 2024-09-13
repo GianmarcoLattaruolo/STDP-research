@@ -8,9 +8,15 @@ My work focused on the Spike Timing Dependent Plasticity (STDP) learning rules w
 
 ## Repository Structure
 
-The folders in the repository contains the following
+The repositor tructure is the following
 
-- STDP_playground
-- digit recognition
+- **STDP_playground**: in this folder you can find all the implementation and the basic experiments with every object built from scratch. I didn'tuse any type of machine learning library in this folder's code.
+  - STDP_basic_experiments.ipynb
+  - neurons.py
+  - learning_rules.py
+  - experiments.py
+  - plot_utils.py
+- **digit recognition**
+- 
 
 
