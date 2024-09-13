@@ -6,6 +6,7 @@ import time
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import pickle
 
 # graphics libraries
 import matplotlib
@@ -293,7 +294,7 @@ class snn_mnist(nn.Module):
         return pre_syn_traces
 
 
-    def compute_refractory_times(self, spk, spk_prev, mem_prev, syn_prev, mem, syn, store=True):
+    def compute_refractory_times(self, spk, spk_prev, mem_prev, syn_prev, mem, syn, store):
         """
         With this method we compute the refractory period of the neurons
         We first identify the neurons that are in refractory period
@@ -561,6 +562,7 @@ class snn_mnist(nn.Module):
                 
                 # indicator of the time step to store the records
                 store = self.pars['store_records'] and time_step % self.t == 0
+                store=False
                 
                 # store the previous values of mem and syn to allow the refractory period to work
                 if self.pars['refractory_period'] and time_step > 0:
@@ -582,7 +584,7 @@ class snn_mnist(nn.Module):
                 
                 # check if some neurons are in refractory time 
                 if self.pars['refractory_period']  and time_step > 0:
-                    spk, syn, mem = self.compute_refractory_times(spk,spk_prev, mem_prev, syn_prev, mem, syn, store = store)
+                    spk, syn, mem = self.compute_refractory_times(spk,spk_prev, mem_prev, syn_prev, mem, syn, store = False)
 
                 # apply lateral inhibition
                 if self.pars['lateral_inhibition']:
@@ -762,6 +764,11 @@ class snn_mnist(nn.Module):
         return
 
 
+    # function to save the model in a pickle file
+    def save_model(self, path):
+        with open(path, 'wb') as file:
+            pickle.dump(self, file)
+        return
 
 ####################################
 #                                  #
@@ -772,6 +779,13 @@ class snn_mnist(nn.Module):
 
 
 def train_model(model, train_loader, val_loader = None, num_epochs = 1, val_accuracy_record = True) :   
+
+    history = {
+        'weights_mean' : [],
+        'anspnpi' : [],
+        'val_acc': [],
+        'conf_assignments' : [],
+    }
     
     if val_accuracy_record and val_loader is None:
         raise ValueError("If val_accuracy_record is set to True, val_loader must be provided")
@@ -799,10 +813,19 @@ def train_model(model, train_loader, val_loader = None, num_epochs = 1, val_accu
 
                 # update the progress bar
                 pbar.set_postfix(acc=f'{accuracy:.4f}', time=f'{time.time() - start_time:.2f}s', ANSPNPI = f'{anspnpi:.2e}')
+
+                # store the records
+                history['val_acc'].append(accuracy)
+                history['anspnpi'].append(anspnpi)
+                history['conf_assignments'].append(np.sum(temp_assignments.conf_status +0.0))              
             else:
                 pbar.set_postfix( time=f'{time.time() - start_time:.2f}s')
 
-    return model
+        # store a dictionary with the records
+        history['weights_mean'] = model.get_records()['W'].mean(axis = (1,2))
+        model.reset_records()
+
+    return model, history
 
 
 

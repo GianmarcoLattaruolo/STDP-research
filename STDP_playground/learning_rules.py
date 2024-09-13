@@ -198,11 +198,5 @@ class STDP_synapse:
 
 
 
-
-
-
-
-
-
 if __name__ == "__main__":
-    print('experiment is currentlyon the STDP-basic-experiments notebook')
+    print('experiment is currently on the STDP-basic-experiments notebook')

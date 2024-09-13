@@ -42,7 +42,6 @@ import torch.nn as nn
 
 
 def mnist_pars(**kwargs):  #DA SISTEMARE
-    
     '''
     Define a dictionary with the default parameters for the nuerons, the weight update rule and the simulation overall
     ARGS:

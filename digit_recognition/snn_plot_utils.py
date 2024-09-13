@@ -406,6 +406,7 @@ def plot_results_33(dt, num_steps, cur_in, pre_trace, cond_rec, N_pre, mem_rec, 
     return
 
 
+
 def all_post_weights_evolution(weight_history, N_pre_correlated, block_of_index):
 
     # retrive num_steps, N_post, N_pre from weight_history

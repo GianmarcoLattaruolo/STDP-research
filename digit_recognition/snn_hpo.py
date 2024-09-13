@@ -114,12 +114,12 @@ class snn_hpo:
             'reset_mechanism' : 'subtract',             # reset mechanism for the neuron potential
             # parameters for dynamic threshold   
             'dynamic_threshold' : True,                 # use a dynamic threshold for the neuron
-            'tau_theta' : 1000.,                          # time constant for the dynamic threshold                       
+            'tau_theta' : 1000.,                        # time constant for the dynamic threshold                       
             # parameters for lateral inhibition
             'lateral_inhibition': True,                 # use lateral inhibition
             'lateral_inhibition_strength': 0.1,         # strength of the lateral inhibition 
             # parameters for the refractory period
-            'refractory_period' : True,                # use a refractory period
+            'refractory_period' : True,                 # use a refractory period
 
             # STDP parameters
             'beta_minus' : 0.25,                        # decay factor for the pre-synaptic trace
@@ -149,7 +149,8 @@ class snn_hpo:
             STDP_offset = trial.suggest_float("STDP_offset", 0.0001, 1.0, log = True)
             leaning_rate = trial.suggest_float("learn_rate", 0.00001, 0.1, log = True)
 
-            stdp_params = {'STDP_offset' : STDP_offset,'leaning_rate' : leaning_rate}
+            stdp_params = {'STDP_offset' : STDP_offset,'learning_rate' : leaning_rate}
+
         elif STDP_type == 'asymptotic':
 
             A_minus = trial.suggest_float("A_minus", 0.001, 10.0, log = True ) # from prelimanires grid search A_minus is much greater than A_plus
@@ -264,8 +265,8 @@ class snn_hpo:
         best_values['gain'] = best_trial['gain']
         best_values['min_rate'] = best_trial['min_rate']
         best_values['weight_initializer'] = best_trial['weight_initializer']
-        best_values['theta_add'] = best_trial['theta_add']
-        best_values['ref_time'] = best_trial['ref_time']
+        # best_values['theta_add'] = best_trial['theta_add']
+        # best_values['ref_time'] = best_trial['ref_time']
 
         # calculate the best ranges
         if self.STDP_type == 'classic':
@@ -273,15 +274,21 @@ class snn_hpo:
             max_A_minus = good_trials['params_A_minus'].max()
             min_A_plus = good_trials['params_A_plus'].min()
             max_A_plus = good_trials['params_A_plus'].max()
+            theta_add_max = good_trials['params_theta_add'].max()
+            theta_add_min = good_trials['params_theta_add'].min()
+            ref_time_max = good_trials['params_ref_time'].max()
+            ref_time_min = good_trials['params_ref_time'].min()
             best_ranges['A_minus'] = trial.suggest_float('A_minus',min_A_minus, max_A_minus)
             best_ranges['A_plus'] = trial.suggest_float('A_plus',min_A_plus, max_A_plus)
+            best_ranges['theta_add'] = trial.suggest_float('theta_add',theta_add_min, theta_add_max)
+            best_ranges['ref_time'] = trial.suggest_int('ref_time',ref_time_min, ref_time_max)
 
         elif self.STDP_type == 'offset':
-            min_learnin_rate = good_trials['params_learning_rate'].min()
-            max_learnin_rate = good_trials['params_learning_rate'].max()
+            min_learnin_rate = good_trials['params_learn_rate'].min()
+            max_learnin_rate = good_trials['params_learn_rate'].max()
             min_STDP_offset = good_trials['params_STDP_offset'].min()
             max_STDP_offset = good_trials['params_STDP_offset'].max()
-            best_ranges['learning_rate'] = trial.suggest_float('learning_rate',min_learnin_rate, max_learnin_rate)
+            best_ranges['learning_rate'] = trial.suggest_float('learn_rate',min_learnin_rate, max_learnin_rate)
             best_ranges['STDP_offset'] = trial.suggest_float('STDP_offset',min_STDP_offset, max_STDP_offset)
             
         elif self.STDP_type == "asymptotic":
@@ -399,86 +406,7 @@ class snn_hpo:
 
         return
     
-    # define a function to print the statistics of the study
-    def print_statistics(self):
-        flag = True
-        if hasattr(self, 'study_rate'):
-            print(f"Study for the rate stabilization statistics of {self.STDP_type} STDP: ")
-            study = self.study_rate
-            pruned_traials = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
-            complete_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
 
-            print(f"")
-            print(f"  Number of finished trials: {len(study.trials)}")
-            print(f"  Number of pruned trials: {len(pruned_traials)}")
-            print(f"  Number of complete trials: {len(complete_trials)}")
-
-            print("Best trial:")
-            best_trial = study.best_trial
-
-            print(f"  Value: {best_trial.value}")
-
-            print("  Params: ")
-            for key, value in best_trial.params.items():
-                print(f"    {key}: {value}")
-            flag = False
-
-            print(f'Best Ranges')
-            sort_trials_df = study.trials_dataframe().sort_values(by='value', ascending=True)
-            sort_trials_df = sort_trials_df[sort_trials_df['state'] == 'COMPLETE']
-            good_trials = sort_trials_df.head(1000)
-            if self.STDP_type == 'classic' or self.STDP_type == 'asymptotic':
-                min_A_minus = good_trials['params_A_minus'].min()
-                max_A_minus = good_trials['params_A_minus'].max()
-                min_A_plus = good_trials['params_A_plus'].min()
-                max_A_plus = good_trials['params_A_plus'].max()
-                print(f'A_minus: {min_A_minus:.2e} - {max_A_minus:.2e}')
-                print(f'A_plus: {min_A_plus:.2e} - {max_A_plus:.2e}')
-                # plot the distribution of A_minus and A_plus
-                plt.hist(good_trials['params_A_minus'], bins = 20)
-                plt.title('A_minus distribution')
-                plt.show()
-                plt.hist(good_trials['params_A_plus'], bins = 20)
-                plt.title('A_plus distribution')
-                plt.show()
-            elif self.STDP_type == 'offset':
-                min_learnin_rate = good_trials['params_learn_rate'].min()
-                max_learnin_rate = good_trials['params_learn_rate'].max()
-                min_STDP_offset = good_trials['params_STDP_offset'].min()
-                max_STDP_offset = good_trials['params_STDP_offset'].max()
-                print(f'learning_rate: {min_learnin_rate:.2e} - {max_learnin_rate:.2e}')
-                print(f'STDP_offset: {min_STDP_offset:.2e} - {max_STDP_offset:.2e}')
-                # plot the histogram of param_learning_rate
-                plt.hist(good_trials['params_learn_rate'], bins = 20)
-                plt.title('Learning rate distribution')
-                plt.show()
-
-
-        if hasattr(self, 'study_accuracy'):
-            print(f"Study for the accuracy optimization statistics: ")
-            study = self.study_accuracy
-            pruned_traials = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
-            complete_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
-
-            print(f"")
-            print(f"  Number of finished trials: {len(study.trials)}")
-            print(f"  Number of pruned trials: {len(pruned_traials)}")
-            print(f"  Number of complete trials: {len(complete_trials)}")
-
-            print("Best trial:")
-            trial = study.best_trial
-
-            print(f"  Value: {trial.value}")
-
-            print("  Params: ")
-            for key, value in trial.params.items():
-                print(f"    {key}: {value}")
-            flag = False
-        if flag:
-            print('No study has been initialized')
-
-        return
-    
     # define a function to initialize the study for the accuracy optimization
     def initialize_accuracy_study(self):
 
@@ -486,7 +414,7 @@ class snn_hpo:
         STDP = self.STDP_type
         main_hpo_dir = self.main_dir+'\\HPO'
 
-        study_name = STDP + '_STDP_optimize_accuracy'
+        study_name = STDP + '_STDP_optimize_acc'
         study_storage = f'sqlite:///{main_hpo_dir}/{study_name}.db'
         # initialize the study
         study = optuna.create_study(
@@ -538,12 +466,11 @@ class snn_hpo:
             n_neurons = trial.suggest_int("n_neurons", 128, 1024, step = 64)
             model = snn_mnist(pars,28*28, n_neurons).to(self.device)
 
-            # set user attributes
-            trial.set_user_attr('weight_initialization_type',best_values['weight_initializer'])
-            trial.set_user_attr('min_spk',[])
+            # list to store the confidences in assignment
+            conf_ass = []
 
             # train the model
-            num_epochs = 10
+            num_epochs = 5
             for epochs in range(num_epochs):
                 start_time = time.time()
 
@@ -557,14 +484,16 @@ class snn_hpo:
                         model.forward(data_it)
 
                         # check the min spk number
-                        min_spk = torch.stack(model.neuron_records['spk']).detach().numpy().sum(dtype = np.float64) 
-                        trial.user_attrs['min_spk'].append(min_spk)
+                        # min_spk = torch.stack(model.neuron_records['spk']).detach().numpy().sum(dtype = np.float64) 
+                        # trial.user_attrs['min_spk'].append(min_spk)
 
                         # Update progress bar
                         pbar.update(1)
 
                     # assign the label to the neurons
                     temp_assignments = assign_neurons_to_classes(model, sub_val, verbose = 0 )
+                    percent_of_good_assignments = np.mean(np.array(temp_assignments.conf_status +0.0), dtype = np.float64)
+                    conf_ass.append(percent_of_good_assignments)
 
                     # compute the accuracy so far
                     accuracy, anspnpi = classify_test_set(model, sub_test, temp_assignments, verbose = 0)
@@ -578,7 +507,18 @@ class snn_hpo:
                     # handle pruning
                     if trial.should_prune():
                         raise optuna.exceptions.TrialPruned()
-        
+                
+            # set user attributes
+            total_anspnpi = np.mean(model.anspnpi[-len(sub_train):], dtype = np.float64)
+            first_anspnpi = np.mean(model.anspnpi[-len(sub_train)], dtype = np.float64)
+            last_anspnpi = np.mean(model.anspnpi[-1], dtype = np.float64)
+            mean_weights = model.fc.weight.data.detach().numpy().mean(dtype=np.float64)
+            trial.set_user_attr('total_anspnpi', total_anspnpi)
+            trial.set_user_attr('first_anspnpi', first_anspnpi)
+            trial.set_user_attr('last_anspnpi', last_anspnpi)
+            trial.set_user_attr('mean_weights', mean_weights)
+            trial.set_user_attr('conf_ass', conf_ass)
+
             return accuracy
         
         # optimize the study
@@ -595,7 +535,125 @@ class snn_hpo:
 
         return
 
+    # define a function to print the statistics of the study
+    def print_statistics(self, type = 'rate'):
 
+        flag = True
+        if type=='rate':
+            print(f"Study for the rate stabilization statistics of {self.STDP_type} STDP: ")
+            study = self.study_rate
+            pruned_traials = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
+            complete_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+
+            print(f"")
+            print(f"  Number of finished trials: {len(study.trials)}")
+            print(f"  Number of pruned trials: {len(pruned_traials)}")
+            print(f"  Number of complete trials: {len(complete_trials)}")
+
+            print("Best trial:")
+            best_trial = study.best_trial
+
+            print(f"  Value: {best_trial.value}")
+
+            print("  Params: ")
+            for key, value in best_trial.params.items():
+                print(f"    {key}: {value}")
+            flag = False
+
+            print(f'Best Ranges')
+            sort_trials_df = study.trials_dataframe().sort_values(by='value', ascending=True)
+            sort_trials_df = sort_trials_df[sort_trials_df['state'] == 'COMPLETE']
+            good_trials = sort_trials_df.head(1000)
+            if self.STDP_type == 'classic' or self.STDP_type == 'asymptotic':
+                min_A_minus = good_trials['params_A_minus'].min()
+                max_A_minus = good_trials['params_A_minus'].max()
+                min_A_plus = good_trials['params_A_plus'].min()
+                max_A_plus = good_trials['params_A_plus'].max()
+                print(f'A_minus: {min_A_minus:.2e} - {max_A_minus:.2e}')
+                print(f'A_plus: {min_A_plus:.2e} - {max_A_plus:.2e}')
+                # plot the distribution of A_minus and A_plus
+                plt.hist(good_trials['params_A_minus'], bins = 20)
+                plt.title('A_minus distribution')
+                plt.show()
+                plt.hist(good_trials['params_A_plus'], bins = 20)
+                plt.title('A_plus distribution')
+                plt.show()
+            elif self.STDP_type == 'offset':
+                min_learnin_rate = good_trials['params_learn_rate'].min()
+                max_learnin_rate = good_trials['params_learn_rate'].max()
+                min_STDP_offset = good_trials['params_STDP_offset'].min()
+                max_STDP_offset = good_trials['params_STDP_offset'].max()
+                print(f'learning_rate: {min_learnin_rate:.2e} - {max_learnin_rate:.2e}')
+                print(f'STDP_offset: {min_STDP_offset:.2e} - {max_STDP_offset:.2e}')
+                # plot the histogram of param_learn_rate
+                plt.hist(good_trials['params_learn_rate'], bins = 20)
+                plt.title('Learning rate distribution')
+                plt.show()
+                # plot the histogram of params_STDP_offset
+                plt.hist(good_trials['params_STDP_offset'], bins=20)
+                plt.title('offset distribution')
+                plt.show()
+
+
+        elif type == 'accuracy':
+            print(f"Study for the accuracy optimization statistics: ")
+            study = self.study_accuracy
+            pruned_traials = [t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED]
+            complete_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+
+            print(f"")
+            print(f"  Number of finished trials: {len(study.trials)}")
+            print(f"  Number of pruned trials: {len(pruned_traials)}")
+            print(f"  Number of complete trials: {len(complete_trials)}")
+
+            print("Best trial:")
+            trial = study.best_trial
+
+            print(f"  Value: {trial.value}")
+
+            print("  Params: ")
+            for key, value in trial.params.items():
+                print(f"    {key}: {value}")
+            flag = False
+
+            print(f'Best Ranges')
+            sort_trials_df = study.trials_dataframe().sort_values(by='value', ascending=True)
+            sort_trials_df = sort_trials_df[sort_trials_df['state'] == 'COMPLETE']
+            good_trials = sort_trials_df.head(1000)
+            if self.STDP_type == 'classic' or self.STDP_type == 'asymptotic':
+                min_A_minus = good_trials['params_A_minus'].min()
+                max_A_minus = good_trials['params_A_minus'].max()
+                min_A_plus = good_trials['params_A_plus'].min()
+                max_A_plus = good_trials['params_A_plus'].max()
+                print(f'A_minus: {min_A_minus:.2e} - {max_A_minus:.2e}')
+                print(f'A_plus: {min_A_plus:.2e} - {max_A_plus:.2e}')
+                # plot the distribution of A_minus and A_plus
+                plt.hist(good_trials['params_A_minus'], bins = 20)
+                plt.title('A_minus distribution')
+                plt.show()
+                plt.hist(good_trials['params_A_plus'], bins = 20)
+                plt.title('A_plus distribution')
+                plt.show()
+            
+            # display n_neurons distribution
+            plt.hist(good_trials['params_n_neurons'], bins = 20)
+            plt.title('n_neurons distribution')
+            plt.show()
+            # display batch_size distribution
+            plt.hist(good_trials['params_batch_size'], bins = 20)
+            plt.title('batch_size distribution')
+            plt.show()
+            # display num_steps distribution
+            plt.hist(good_trials['params_num_steps'], bins = 20)
+            plt.title('num_steps distribution')
+            plt.show()
+            
+            
+        elif flag:
+            print('No study has been initialized')
+
+        return
+    
 
 ############################################################################################################
     # 4. compare the results between the different STDP types and choose the best
