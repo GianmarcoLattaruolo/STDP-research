@@ -8,7 +8,7 @@ My work focused on the Spike Timing Dependent Plasticity (STDP) learning rules w
 
 ## Repository Structure
 
-The repositor tructure is the following
+The repository structure is the following and it is essentially divided in the two different phases of my reasearch:
 
 - **STDP_playground**: in this folder you can find all the implementation and the basic experiments with every object built from scratch. I didn'tuse any type of machine learning library in this folder's code.
   - STDP_basic_experiments.ipynb
@@ -16,6 +16,8 @@ The repositor tructure is the following
   - learning_rules.py
   - experiments.py
   - plot_utils.py
+
+
 - **digit_recognition**
   - HPO
   - animation
@@ -27,6 +29,13 @@ The repositor tructure is the following
   - snn_hpo.py
   - snn_models.py
   - snn_plot_utils
+
+  
+- .gitignore
+- requirements.txt
+- torch+.yml
+- LICENSE
+- README.md
  
 
 
